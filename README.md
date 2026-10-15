@@ -17,8 +17,13 @@ The script runs as before. At exit, the video goes to `media/videos/480p15/<scri
 1. On import, `ibis_anim` wraps the methods of `ibis.Table` and `GroupedTable` (`filter`, `mutate`, `join`, `aggregate`, `pivot_wider`, ...).
 2. Each call records a step: the op, the input and output tables, the referenced columns, the Python call stack and the source text of the call. The ibis expressions are lazy, so nothing executes at this point.
 3. Python control flow needs no special handling. An `if` records only the branch that ran. A loop records one step per iteration.
-4. At exit, each step runs again on DuckDB, on the first 6 rows of each input only. Thus each value in the animation comes from the rows on the screen.
-5. Each kind of operation has its own animation, in phases. A caption under the code explains each phase.
+4. The video looks like a debugger. The left panel shows the call stack and the tables in scope. The right panel shows the code around the current line, and under it the animation of the step.
+   - Each table is a card with its name (the variable that holds it), shape, origin and columns.
+   - At each step, the input cards light up yellow, and the input tables grow out of their cards. At the end, the result shrinks into a green card.
+   - When the result rebinds a variable (`orders = orders.filter(...)`), or a chain goes on, the result card takes the place of the input card.
+   - A table that no later step reads goes dim. Two steps after its last use, it leaves the panel.
+5. At exit, each step runs again on DuckDB, on the first 6 rows of each input only. Thus each value in the animation comes from the rows on the screen.
+6. Each kind of operation has its own animation, in phases. A caption under the code explains each phase.
 
 | Operation | Animation |
 | --- | --- |
@@ -51,7 +56,8 @@ python examples/rolling.py           # rolling sum, cumulative sum, order_by, li
 python examples/table_ops.py         # union, distinct, fill_null, cast, new columns, select, rename, unnest, intersect
 python examples/customer_health.py   # a realistic job: 5 tables, chains, a loop, a branch, 2 left joins, a rank (22 steps)
 IBIS_ANIM=0 python my_script.py      # run without the video
-python tests/test_tracer.py          # checks
+python tests/test_tracer.py          # checks of the tracer
+python tests/test_scope.py           # checks of the tables panel plan
 ```
 
 To render one function only, call `ibis_anim.visualize(func, *args)`. To get the steps without a video, call `ibis_anim.trace(func, *args)`.

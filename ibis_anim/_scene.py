@@ -7,6 +7,7 @@ rows on the screen. Each kind of operation has its own choreography, in phases w
 from __future__ import annotations
 
 import functools
+import linecache
 import os
 import re
 import sys
@@ -20,11 +21,12 @@ import numpy as np
 from manim import (
     BLACK, BLUE_D, BOLD, DOWN, GOLD_D, GREEN, GREEN_D, GREEN_E, GREY_A, GREY_B, GREY_C, ITALIC, LEFT, MAROON_C, NORMAL,
     ORANGE, ORIGIN, PI, PINK, PURPLE_B, RED, RED_E, RIGHT, TEAL_D, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_E,
-    AnimationGroup, Arrow, Circumscribe, DashedLine, FadeIn, FadeOut, FadeTransform, Indicate, LaggedStart,
-    Rectangle, Rotate, Scene, SurroundingRectangle, Text, Transform, TransformFromCopy, VectorizedPoint, VGroup,
+    GREY_D, AnimationGroup, Arrow, Circumscribe, DashedLine, FadeIn, FadeOut, FadeTransform, Indicate, LaggedStart, Line,
+    Rectangle, Rotate, RoundedRectangle, Scene, SurroundingRectangle, Text, Transform, TransformFromCopy, VectorizedPoint, VGroup,
     tempconfig,
 )
 
+from ibis_anim._scope import ScopeFrame, plan, table_names
 from ibis_anim._tracer import Step, _names, recording, trace
 
 MONO = "Consolas" if sys.platform == "win32" else "Monospace"
@@ -33,8 +35,14 @@ PREVIEW_ROWS = 6
 MAX_COLUMNS = 6
 MAX_RESULT_ROWS = 8
 ROW_H = 0.4
-FRAME_W = 13.4
-ZONE_BOTTOM = -3.45
+ZONE_BOTTOM = -3.8
+DIVIDER_X = -3.95  # left of it: call stack and tables; right of it: code and stage
+SIDEBAR_X = -5.5
+STAGE_X, STAGE_W = 1.6, 10.6
+CARD_W, CARD_H = 2.95, 0.6
+CARDS_TOP, CARDS_BOTTOM = 1.55, -3.9
+CARD_FILL = "#1c1c1c"
+CURRENT_LINE = "#3a3a14"
 NEUTRAL = "#3a3a3a"
 TYPE_FILL = "#1f2a38"
 CAPTION = "#8fd3ff"
@@ -71,6 +79,7 @@ class Sample:
     total: int
     partial: bool = False  # True when the rows come from a part of the input
     types: dict = field(default_factory=dict)  # column name → ibis type, for example "int64"
+    source: object = None  # the op of the input table, to find its card on the panel
 
 
 def _count(table) -> int:
@@ -88,14 +97,15 @@ def _run_on_samples(step: Step) -> tuple[list[Sample], Sample]:
     for t, a in zip(step.inputs, arrows):
         mem = ibis.memtable(a)
         mapping[t.op()] = (mem if mem.schema() == t.schema() else mem.cast(t.schema())).op()
-    ins = [Sample(label, t.columns, a.to_pylist(), _count(t), types=_types(t)) for t, label, a in zip(step.inputs, step.labels, arrows)]
+    ins = [Sample(label, t.columns, a.to_pylist(), _count(t), types=_types(t), source=t.op())
+           for t, label, a in zip(step.inputs, step.labels, arrows)]
     rows = step.output.op().replace(mapping).to_expr().to_pyarrow().to_pylist()
     partial = any(len(s.rows) < s.total for s in ins)
     return ins, Sample("result", step.output.columns, rows, _count(step.output), partial, _types(step.output))
 
 
 def _plain_samples(step: Step) -> tuple[list[Sample], Sample]:
-    ins = [Sample(label, t.columns, t.head(PREVIEW_ROWS).to_pyarrow().to_pylist(), _count(t), types=_types(t))
+    ins = [Sample(label, t.columns, t.head(PREVIEW_ROWS).to_pyarrow().to_pylist(), _count(t), types=_types(t), source=t.op())
            for t, label in zip(step.inputs, step.labels)]
     out = step.output
     return ins, Sample("result", out.columns, out.head(PREVIEW_ROWS).to_pyarrow().to_pylist(), _count(out), types=_types(out))
@@ -313,22 +323,78 @@ class Grid(VGroup):
 # The scene
 
 
+class Card(VGroup):
+    """One table on the tables panel: its name, shape, origin and columns."""
+
+    def __init__(self, name: str, table, origin: str, rows: int):
+        super().__init__()
+        self.box = RoundedRectangle(corner_radius=0.06, width=CARD_W, height=CARD_H, stroke_width=1.2, stroke_color=GREY_B)
+        self.box.set_fill(CARD_FILL, 1)
+        title = Text(name, font=SANS, font_size=17, weight=BOLD)
+        if title.width > CARD_W * 0.55:
+            title.scale_to_fit_width(CARD_W * 0.55)
+        shape = Text(f"{rows} × {len(table.columns)}", font=MONO, font_size=13, color=GREY_A)
+        columns = ", ".join(table.columns)
+        detail = Text((f"{origin} · " if origin else "") + (columns if len(columns) <= 44 else columns[:43] + "…"),
+                      font=MONO, font_size=11, color=GREY_B)
+        if detail.width > CARD_W - 0.2:
+            detail.scale_to_fit_width(CARD_W - 0.2)
+        title.move_to(self.box.get_corner(UL) + [0.1 + title.width / 2, -0.18, 0])
+        shape.move_to(self.box.get_corner(UR) + [-0.1 - shape.width / 2, -0.18, 0])
+        detail.move_to(self.box.get_corner(DOWN + LEFT) + [0.1 + detail.width / 2, 0.15, 0])
+        self.add(self.box, title, shape, detail)
+
+    def set_state(self, state: str):
+        """input: read by the step; output: made by the step; idle: in scope; dead: no later step reads it."""
+        color, width, opacity = {"input": (YELLOW, 3, 1), "output": (GREEN, 3, 1), "idle": (GREY_B, 1.2, 0.7),
+                                 "dead": (GREY_C, 1, 0.3)}[state]
+        self.set_opacity(opacity)
+        self.box.set_stroke(color, width, opacity)
+        return self
+
+
+def _card_slots(n: int) -> list[tuple[np.ndarray, float]]:
+    """Centre and height of each card on the panel. Many cards get smaller."""
+    gap = min(CARD_H + 0.1, (CARDS_TOP - CARDS_BOTTOM) / max(n, 1))
+    height = min(CARD_H, gap - 0.08)
+    return [(np.array([SIDEBAR_X, CARDS_TOP - gap * (j + 0.5), 0]), height) for j in range(n)]
+
+
+def _source_lines(frame, around: int = 2) -> list[tuple[int, str]]:
+    lines = [(n, linecache.getline(frame.filename, n).rstrip()) for n in range(max(1, frame.lineno - around), frame.lineno + around + 1)]
+    return [(n, text) for n, text in lines if text or n == frame.lineno]
+
+
 class DebuggerScene(Scene):
+    """A debugger view: call stack and tables on the left, the code and the current step on the right."""
+
     def __init__(self, steps: list[Step], title: str, **kwargs):
         self.steps, self.title = steps, title
-        self.chrome = self.caption = None
-        self.zone_top = 1.8
+        self.frames, self.names = plan(steps), table_names(steps)
+        self.origins = {s.output.op(): f"{s.function}()" for s in steps}
+        self.chrome = self.caption = self.stack_panel = self.result = self.code = None
+        self.cards, self.rows = {}, {}
+        self.zone_top = 1.2
+        self.sidebar = VGroup(
+            Text("CALL STACK", font=SANS, font_size=15, weight=BOLD, color=GREY_B).move_to([SIDEBAR_X - 0.75, 3.75, 0]),
+            Text("TABLES", font=SANS, font_size=15, weight=BOLD, color=GREY_B).move_to([SIDEBAR_X - 0.95, CARDS_TOP + 0.25, 0]),
+            Line([DIVIDER_X, 4, 0], [DIVIDER_X, -4, 0], stroke_width=1, color=GREY_D),
+        )
         super().__init__(**kwargs)
 
     def construct(self):
         self.next_section("00_overview")
         self._overview()
-        for i, step in enumerate(self.steps, 1):
+        self.play(FadeIn(self.sidebar))
+        for i, (step, frame) in enumerate(zip(self.steps, self.frames), 1):
             self.next_section(f"{i:02d}_{step.function}_{step.op.split()[-1]}")
             self._header(i, step)
+            self._activate(frame)
+            self.result = None
             self._animate(step)
-            self.wait(2)
-            self.play(*[FadeOut(m) for m in self.mobjects])
+            self.wait(1.5)
+            self._finish(step, frame)
+        self.wait(2)
 
     def _overview(self):
         title = Text(f"Tracing {self.title}", font=SANS, font_size=40, weight=BOLD).to_edge(UP)
@@ -342,41 +408,112 @@ class DebuggerScene(Scene):
         self.play(FadeOut(title), FadeOut(listing))
 
     def _header(self, i: int, step: Step):
-        crumbs = Text(" › ".join(f.name for f in step.stack) or "?", font=SANS, font_size=20, color=GREY_B)
-        crumbs.to_corner(UL, buff=0.3)
-        counter = Text(f"step {i}/{len(self.steps)}", font=SANS, font_size=20, color=GREY_B).to_corner(UR, buff=0.3)
-        op = Text(step.op.upper(), font=SANS, font_size=34, weight=BOLD).next_to(crumbs, DOWN, buff=0.2, aligned_edge=LEFT)
-        code = Text(textwrap.fill(step.code, 90), font=MONO, font_size=20, color=YELLOW_A)
-        if code.width > 13:
-            code.scale_to_fit_width(13)
-        code.next_to(op, DOWN, buff=0.15, aligned_edge=LEFT)
+        """The step title, the code around the current line, and the call stack."""
         frame = step.stack[-1] if step.stack else None
-        where = f"{os.path.relpath(frame.filename)}:{frame.lineno} in {frame.name}()" if frame else ""
-        location = Text(where, font=MONO, font_size=16, color=GREY_C).to_corner(DOWN + LEFT, buff=0.25)
-        self.chrome, self.caption = VGroup(crumbs, counter, op, code, location), None
-        self.zone_top = code.get_bottom()[1] - 0.75
-        self.play(FadeIn(self.chrome), run_time=0.6)
+        left = DIVIDER_X + 0.25
+        op = Text(step.op.upper(), font=SANS, font_size=28, weight=BOLD)
+        op.move_to([left + op.width / 2, 3.72, 0])
+        where = Text(f"{os.path.basename(frame.filename)} › {frame.name}()" if frame else "", font=MONO, font_size=14, color=GREY_B)
+        where.next_to(op, RIGHT, buff=0.3, aligned_edge=DOWN)
+        counter = Text(f"step {i}/{len(self.steps)}", font=SANS, font_size=18, color=GREY_B).to_corner(UR, buff=0.3)
+        lines = _source_lines(frame) if frame else []
+        if not any(text for _, text in lines):
+            lines = [(frame.lineno if frame else 0, step.code)]
+        code = VGroup()
+        for n, text in lines:
+            current = frame is not None and n == frame.lineno
+            code.add(Text(f"{'→' if current else ' '}{n:>4}  {text[:110]}", font=MONO, font_size=15,
+                          color=YELLOW_A if current else GREY_B))
+        code.arrange(DOWN, buff=0.1, aligned_edge=LEFT)
+        if code.width > STAGE_W:
+            code.scale_to_fit_width(STAGE_W)
+        code.move_to([left + code.width / 2, 3.3 - code.height / 2, 0])
+        current = next((line for (n, _), line in zip(lines, code) if frame and n == frame.lineno), code[0])
+        band = Rectangle(width=STAGE_W + 0.3, height=current.height + 0.1, stroke_width=0).set_fill(CURRENT_LINE, 1)
+        band.move_to([left - 0.1 + band.width / 2, current.get_center()[1], 0])
+        chrome = VGroup(band, op, where, counter, code)
+        frames = [f for f in reversed(step.stack) if f.name != "<module>"][:5]
+        stack = VGroup(*[Text(f"{'▸' if k == 0 else ' '} {f.name}", font=MONO, font_size=15, color=YELLOW_A if k == 0 else GREY_B)
+                         for k, f in enumerate(frames)]).arrange(DOWN, buff=0.1, aligned_edge=LEFT)
+        stack.move_to([SIDEBAR_X - 1.4 + stack.width / 2, 3.45 - stack.height / 2, 0])
+        anims = [FadeTransform(self.chrome, chrome) if self.chrome else FadeIn(chrome)]
+        anims.append(FadeTransform(self.stack_panel, stack) if self.stack_panel else FadeIn(stack))
+        self.play(*anims, run_time=0.6)
+        self.chrome, self.stack_panel, self.code = chrome, stack, code
+        self.zone_top = code.get_bottom()[1] - 0.7
+
+    def _card(self, key) -> Card:
+        if key not in self.rows:
+            self.rows[key] = _count(key.to_expr())
+        return Card(self.names.get(key, "table"), key.to_expr(), self.origins.get(key, ""), self.rows[key])
+
+    def _activate(self, frame: ScopeFrame):
+        """New tables join the panel; the step's inputs light up; the others dim."""
+        anims = []
+        for key, (pos, height) in zip(frame.shown, _card_slots(len(frame.shown))):
+            state = "input" if key in frame.inputs else "dead" if key in frame.dead else "idle"
+            if key not in self.cards:
+                self.cards[key] = card = self._card(key).set_state(state)
+                anims.append(FadeIn(card.scale_to_fit_height(height).move_to(pos), shift=RIGHT * 0.4))
+            else:
+                anims.append(self.cards[key].animate.set_state(state).scale_to_fit_height(height).move_to(pos))
+        self.play(*anims, run_time=0.7)
+        self.play(*[Circumscribe(self.cards[k], color=YELLOW, buff=0.04) for k in frame.inputs], run_time=0.8)
+
+    def _enter(self, *grids):
+        """Each input table grows out of its card on the panel."""
+        anims = []
+        for g in grids:
+            card = self.cards.get(g.sample.source)
+            anims.append(FadeIn(g, target_position=card.get_center(), scale=0.2) if card else FadeIn(g))
+        self.play(*anims, run_time=0.9)
+
+    def _finish(self, step: Step, frame: ScopeFrame):
+        """The result shrinks into its card; replaced and expired cards leave; the panel closes up."""
+        persistent = {id(m) for m in self._persistent()}
+        result = self.result or VGroup(*[m for m in self.mobjects if id(m) not in persistent])
+        family = {id(m) for m in result.get_family()}
+        stage = [m for m in self.mobjects if id(m) not in persistent and not family & {id(x) for x in m.get_family()}]
+        slots = dict(zip(frame.after, _card_slots(len(frame.after))))
+        pos, height = slots.get(frame.output, (np.array([SIDEBAR_X, CARDS_BOTTOM, 0]), CARD_H))
+        card = self._card(frame.output).set_state("output").scale_to_fit_height(height).move_to(pos)
+        anims = [FadeOut(m) for m in stage] + [FadeOut(result, target_position=pos, scale=0.12), FadeIn(card, scale=0.7)]
+        if self.caption:
+            anims.append(FadeOut(self.caption))
+        for key in [frame.replaced, *frame.expired]:
+            if key is not None and key in self.cards:
+                anims.append(FadeOut(self.cards.pop(key), shift=LEFT * 0.4 if key != frame.replaced else ORIGIN))
+        for key, (p, h) in slots.items():
+            if key in self.cards:
+                anims.append(self.cards[key].animate.scale_to_fit_height(h).move_to(p))
+        self.play(*anims, run_time=1.3)
+        self.cards[frame.output], self.caption = card, None
+        self._settle()
+
+    def _persistent(self) -> list:
+        return [m for m in (self.sidebar, self.stack_panel, self.chrome, self.caption, *self.cards.values()) if m is not None]
 
     # -- helpers -----------------------------------------------------------------------------
 
     def _say(self, text: str, wait=0.6):
         """Show the caption of the current phase under the code."""
-        new = Text("▸ " + textwrap.fill(text, 100), font=SANS, font_size=21, color=CAPTION)
-        if new.width > 13:
-            new.scale_to_fit_width(13)
-        new.next_to(self.chrome[3], DOWN, buff=0.2, aligned_edge=LEFT)
+        new = Text("▸ " + textwrap.fill(text, 90), font=SANS, font_size=19, color=CAPTION)
+        if new.width > STAGE_W:
+            new.scale_to_fit_width(STAGE_W)
+        new.next_to(self.code, DOWN, buff=0.18).align_to([DIVIDER_X + 0.25, 0, 0], LEFT)
         self.play(FadeTransform(self.caption, new) if self.caption else FadeIn(new), run_time=0.5)
         self.caption = new
         if wait:
             self.wait(wait)
 
     def _settle(self, *keep):
-        """Keep only the header, the caption and `keep` on the screen."""
-        self.remove(*[m for m in self.mobjects if m is not self.chrome and m is not self.caption])
+        """Keep only the debugger frame, the caption and `keep` on the screen."""
+        persistent = {id(m) for m in self._persistent()}
+        self.remove(*[m for m in self.mobjects if id(m) not in persistent])
         self.add(*keep)
 
     def _scale(self, grids, width: float, height: float) -> float:
-        f = min(1.5, FRAME_W / width, (self.zone_top - ZONE_BOTTOM) / height)  # small tables grow, to stay readable
+        f = min(1.5, STAGE_W / width, (self.zone_top - ZONE_BOTTOM) / height)  # small tables grow, to stay readable
         for g in grids:
             g.scale(f, about_point=ORIGIN)
         return f
@@ -387,7 +524,7 @@ class DebuggerScene(Scene):
     def _side_by_side(self, grids, gap=1.2):
         width = sum(g.width for g in grids) + gap * (len(grids) - 1)
         f = self._scale(grids, width, max(g.height for g in grids))
-        x = -width * f / 2
+        x = STAGE_X - width * f / 2
         for g in grids:
             self._put(g, x)
             x += g.width + gap * f
@@ -396,7 +533,7 @@ class DebuggerScene(Scene):
         """Draw the grids on top of each other, with the same top-left cell."""
         grids = [first, *others]
         self._scale(grids, max(g.width for g in grids) + 2.5, max(g.height for g in grids))  # room for marks and arrows
-        self._put(first, -max(g.width for g in grids) / 2)
+        self._put(first, STAGE_X - max(g.width for g in grids) / 2)
         for g in others:
             g.shift(first.slot(-1, 0) - g.slot(-1, 0))
 
@@ -485,7 +622,7 @@ class DebuggerScene(Scene):
         grids = [Grid(s, shown, width, used=step.used) for s, shown in zip(ins, shown_ins)]
         res = Grid(out, shown_out, width, created=step.created)
         self._side_by_side([*grids, res])
-        self.play(*[FadeIn(g) for g in grids])
+        self._enter(*grids)
         for g in grids:
             self._highlight(g, step.used)
         anims = []
@@ -494,6 +631,7 @@ class DebuggerScene(Scene):
             anims.append(TransformFromCopy(src, res.column(name)) if src else FadeIn(res.column(name), shift=RIGHT * 0.3))
         self.play(FadeIn(res.title), LaggedStart(*anims, lag_ratio=0.15), run_time=2.5)
         self._settle(*grids, res)
+        self.result = res
 
     def _subset(self, step: Step, ins: list[Sample], out: Sample, test: str | None = None):
         """Each row gets a mark when there is a test; removed rows turn red and leave; the others slide up."""
@@ -502,7 +640,7 @@ class DebuggerScene(Scene):
         keep = [i in idx for i in range(len(s.rows))]
         grid = Grid(s, _pick_columns(s.columns, step.used), _cell_width([s], s.columns), used=step.used)
         self._in_place(grid)
-        self.play(FadeIn(grid))
+        self._enter(grid)
         self._highlight(grid, step.used)
         verb = step.op.split()[-1]
         if test is not None:
@@ -518,6 +656,7 @@ class DebuggerScene(Scene):
         self._subset_marks(grid, keep, marks=test is not None)
         title = Text(f"result · {out.total} rows" + (" in full" if out.partial else ""), font=SANS, font_size=18, color=GREY_A)
         self.play(Transform(grid.title, title.scale(grid.title.height / title.height).move_to(grid.title, aligned_edge=LEFT)))
+        self.result = grid
 
     def _filter(self, step: Step, ins: list[Sample], out: Sample):
         self._subset(step, ins, out, test=_call_args(step.code, "filter"))
@@ -541,18 +680,20 @@ class DebuggerScene(Scene):
         inp = Grid(s, shown, width, used=filled)
         res = Grid(out, shown, width, created=filled)
         self._in_place(inp, res)
-        self.play(FadeIn(inp))
+        self._enter(inp)
         self._say("fill nulls: " + ", ".join(f"{c} → {_expr_text(repl[c])}" for c in filled if c in shown))
         self._highlight(inp, filled)
         nulls = [(r, c) for r, row in enumerate(s.rows) for c in filled if c in shown and row[c] is None]
         if not nulls:
             self._say("there is no null in the rows shown")
+            self.result = inp
             return
         self.play(*[Circumscribe(inp.cell(r, c), color=RED, buff=0.02) for r, c in nulls], run_time=1.2)
         self._say("each null takes the replacement value", wait=0.2)
         self.play(LaggedStart(*[Transform(inp.cell(r, c), res.cell(k, c)) for k, r in enumerate(idx) for c in filled
                                 if r is not None and (r, c) in nulls], lag_ratio=0.3), run_time=2)
         self._settle(res)
+        self.result = res
 
     def _set_op(self, step: Step, ins: list[Sample], out: Sample):
         """Union appends the rows of the second table; intersect and difference test each row."""
@@ -572,7 +713,7 @@ class DebuggerScene(Scene):
             extra = Grid(replace(a, rows=a.rows + b.rows), shown, width)  # only to size the layout
             self._side_by_side([extra, gb], gap=1.2)
             ga.scale(extra.cell_w / ga.cell_w, about_point=ORIGIN).shift(extra.slot(-1, 0) - ga.slot(-1, 0))
-            self.play(FadeIn(ga), FadeIn(gb))
+            self._enter(ga, gb)
             self._say(f"union: the rows of {step.labels[1]} go under the rows of {step.labels[0]}")
             n = len(a.rows)
             self.play(*[gb.row(j).animate(path_arc=0.6).move_to(ga.slot(n + j, (len(shown) - 1) / 2)) for j in range(len(b.rows))],
@@ -589,7 +730,7 @@ class DebuggerScene(Scene):
                 self.play(*[rows[i].animate.shift(UP * (ga.slot(j, 0)[1] - ga.slot(i, 0)[1])) for j, i in enumerate(kept) if j != i])
             return
         self._side_by_side([ga, gb], gap=1.5)
-        self.play(FadeIn(ga), FadeIn(gb))
+        self._enter(ga, gb)
         word = "is also in" if verb == "intersect" else "is not in"
         self._say(f"{verb}: keep each row of {step.labels[0]} that {word} {step.labels[1]} (same colour = same row)")
         self._subset_marks(ga, [hit if verb == "intersect" else not hit for hit in in_b])
@@ -627,7 +768,7 @@ class DebuggerScene(Scene):
         width = _cell_width([s, out], [*in_shown, *out_shown])
         inp, res = Grid(s, in_shown, width, used=[col]), Grid(out, out_shown, width, created=[new])
         self._side_by_side([inp, res], gap=1.5)
-        self.play(FadeIn(inp))
+        self._enter(inp)
         self._say(f"unnest {col}: each element of the array gets its own row; the other cells are copied")
         self._highlight(inp, [col])
         self.play(FadeIn(res.title), *[TransformFromCopy(inp.header(c), res.header(c)) for c in out_shown if c in inp.shown],
@@ -647,6 +788,7 @@ class DebuggerScene(Scene):
             self.remove(pieces, *[cp for cp, _ in copies])
             self.add(*[res.cell(k, c) for k in targets for c in out_shown])
         self._settle(inp, res)
+        self.result = res
 
     def _order_by(self, step: Step, ins: list[Sample], out: Sample):
         """Highlight the sort keys, draw their direction, and move each row to its new position."""
@@ -655,7 +797,7 @@ class DebuggerScene(Scene):
         names = [k for k, _ in keys]
         grid = Grid(s, _pick_columns(s.columns, names), _cell_width([s], s.columns), used=names)
         self._in_place(grid)
-        self.play(FadeIn(grid))
+        self._enter(grid)
         words = ", ".join(f"{n} ({'ascending' if a else 'descending'})" for n, a in keys)
         self._say(f"sort by {words}")
         self._highlight(grid, names)
@@ -666,6 +808,7 @@ class DebuggerScene(Scene):
         if not self._reorder(grid, perm):
             self._say("the rows are already in this order", wait=0.3)
         self.play(LaggedStart(*[Indicate(grid.cell(r, names[0]), color=YELLOW) for r in range(len(perm))], lag_ratio=0.25), run_time=2)
+        self.result = grid
 
     def _columns(self, step: Step, ins: list[Sample], out: Sample):
         """Carried columns keep or change place; per row, the source cells merge into each new cell."""
@@ -680,7 +823,9 @@ class DebuggerScene(Scene):
         keeps_all = all(c in carried.values() or c in computed for c in s.columns)
         # a mutate keeps every input column, so leave room for the new ones
         kept_inputs = [carried[o] for o in out.columns if o in carried]  # a select shows what it keeps
-        in_shown = _pick_columns(s.columns, [*used, *renamed, *(c for c in computed if c in s.columns), *kept_inputs],
+        dropped_all = [c for c in s.columns if c not in carried.values() and c not in computed][:2]  # and some of what it drops
+        kept_or_dropped = [*dropped_all, *kept_inputs] if verb == "drop" else [*kept_inputs, *dropped_all]
+        in_shown = _pick_columns(s.columns, [*used, *renamed, *(c for c in computed if c in s.columns), *kept_or_dropped],
                                  MAX_COLUMNS - len(new) if keeps_all else MAX_COLUMNS)
         out_shown = [o for o in out.columns if carried.get(o) in in_shown or o in new or o in computed and o in in_shown]
         out, idx = _in_input_order(out, _match(out.rows, s.rows, list(carried.items())))
@@ -692,7 +837,7 @@ class DebuggerScene(Scene):
         inplace = out_shown[: len(in_shown)] == in_shown  # the table only grows to the right
         reshape = not inplace and not new  # columns leave, move or change name, in place
         self._in_place(inp, res) if inplace or reshape else self._side_by_side([inp, res], gap=1.5)
-        self.play(FadeIn(inp))
+        self._enter(inp)
         if inplace and not any(c in computed for c in out_shown):
             self._say("no change in the columns shown")
         if reshape:
@@ -741,6 +886,7 @@ class DebuggerScene(Scene):
                 self.play(Transform(inp.type_cell(name), res.type_cell(name)), run_time=1)
                 self.play(Circumscribe(res.type_cell(name), color=GREEN, buff=0.03), run_time=1)
         self._settle(*([res] if inplace or reshape else [inp, res]))
+        self.result = res
 
     def _window(self, step: Step, ins: list[Sample], out: Sample):
         """Colour the partitions, sort the rows, then slide the window frame down the rows."""
@@ -758,7 +904,7 @@ class DebuggerScene(Scene):
         colors = {}
         inp = Grid(s, in_shown, width, used=important)
         self._in_place(inp, Grid(s, [*in_shown, target], width))  # the second grid only sizes the layout
-        self.play(FadeIn(inp))
+        self._enter(inp)
         if partition:
             self._say(f"partition by {', '.join(partition)}: one colour per group")
             self._highlight(inp, partition)
@@ -804,6 +950,7 @@ class DebuggerScene(Scene):
             self._fly([[(c, res.cell(k, target)) for c in movers]] if movers else [[(inp.row(k), res.cell(k, target))]], run_time=0.8)
         self.play(FadeOut(frame))
         self._settle(res)
+        self.result = res
 
     def _aggregate(self, step: Step, ins: list[Sample], out: Sample):
         """Colour the rows by group, gather each group, then collapse each group into one row."""
@@ -820,7 +967,7 @@ class DebuggerScene(Scene):
         inp = Grid(s, in_shown, width, used=[*keys, *reads])
         res = Grid(out, out_shown, width, used=keys, created=metrics, keys=keys, colors=colors)
         self._side_by_side([inp, res], gap=1.6)
-        self.play(FadeIn(inp))
+        self._enter(inp)
         if keys:
             self._say(f"group by {', '.join(keys)}: rows with the same {', '.join(keys)} get the same colour")
             self._highlight(inp, keys)
@@ -849,6 +996,7 @@ class DebuggerScene(Scene):
             self.play(FadeOut(outline), run_time=0.3)
             self.wait(0.4)
         self._settle(inp, res)
+        self.result = res
 
     def _join(self, step: Step, ins: list[Sample], out: Sample):
         """Move the keys to the inner edges, bring the tables together, line up the rows, merge the keys."""
@@ -881,10 +1029,10 @@ class DebuggerScene(Scene):
         nk = len(lk)
         span = width * (len(merged) + nk)
         f = self._scale([lg, rg, mg], max(lg.width + rg.width + 1.2, span), max(lg.height, rg.height, mg.height))
-        self._put(lg, -(lg.width + rg.width + 1.2 * f) / 2)
+        self._put(lg, STAGE_X - (lg.width + rg.width + 1.2 * f) / 2)
         self._put(rg, lg.get_right()[0] + 1.2 * f)
-        self._put(mg, -span * f / 2)
-        self.play(FadeIn(lg), FadeIn(rg))
+        self._put(mg, STAGE_X - span * f / 2)
+        self._enter(lg, rg)
         self._say(f"{how} join where " + " and ".join(f"{step.labels[0]}.{a} = {step.labels[1]}.{b}" for a, b in zip(lk, rk)))
         self.play(*[Circumscribe(lg.column(c), color=YELLOW, buff=0.03) for c in lk],
                   *[Circumscribe(rg.column(c), color=YELLOW, buff=0.03) for c in rk], run_time=1.2)
@@ -925,6 +1073,7 @@ class DebuggerScene(Scene):
         self._say("the join columns overlap: equal keys become one column")
         self.play(VGroup(rg, *right_copies).animate.shift(LEFT * nk * mg.cell_w), run_time=1.5)
         self._settle(mg)
+        self.result = mg
         self.play(*[Indicate(mg.column(lmap[c], header=False), color=YELLOW) for c in lk], run_time=1.2)
 
     def _pivot_wider(self, step: Step, ins: list[Sample], out: Sample):
@@ -948,7 +1097,7 @@ class DebuggerScene(Scene):
         inp = Grid(s, in_shown, width, used=[name_col])
         res = Grid(out, out_shown, width, created=pivoted)
         self._side_by_side([inp, res], gap=1.6)
-        self.play(FadeIn(inp))
+        self._enter(inp)
         # 1. distinct names become column headers
         self._say(f"names_from = {name_col}: each distinct value becomes a column")
         self._highlight(inp, [name_col])
@@ -977,6 +1126,7 @@ class DebuggerScene(Scene):
                  if _hashable(tuple(row[i] for i in ids)) in out_row and column_of[row[name_col]] in res.shown]
         self._fly(moves, run_time=3, lag_ratio=0.25, path_arc=0.6)
         self._settle(inp, res)
+        self.result = res
 
     def _pivot_longer(self, step: Step, ins: list[Sample], out: Sample):
         """For each input row, the cells of the pivoted columns rotate into a column of the result."""
@@ -998,7 +1148,7 @@ class DebuggerScene(Scene):
         inp = Grid(s, in_shown, width, used=pivoted)
         res = Grid(out, out_shown, width, created=[names_to, values_to])
         self._side_by_side([inp, res], gap=1.6)
-        self.play(FadeIn(inp))
+        self._enter(inp)
         self._say(f"the columns {', '.join(pivoted)} become rows: {names_to} gets the column name, {values_to} the value")
         self._highlight(inp, pivoted)
         self.play(FadeIn(res.title), *[TransformFromCopy(inp.header(c), res.header(c)) for c in id_shown],
@@ -1023,3 +1173,4 @@ class DebuggerScene(Scene):
             self.add(*[res.cell(k, c) for k in targets for c in out_shown])
             self.wait(0.3)
         self._settle(inp, res)
+        self.result = res
