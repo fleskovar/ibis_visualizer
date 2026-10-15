@@ -1,0 +1,14 @@
+[project]
+name = "ibis-anim"
+version = "0.1.0"
+description = "Drop-in ibis replacement: a visual debugger for ibis data transformations, rendered with manim"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["ibis-framework[duckdb]>=10", "manim>=0.19"]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["ibis_anim"]

@@ -218,3 +218,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# light-plan board (tracked as its own git repo)
+.lpm/
+.hcm
+.claude
+.mcp.json
+CLAUDE.md
+
+# rendered videos
+media/
