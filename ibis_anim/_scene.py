@@ -18,11 +18,12 @@ from pathlib import Path
 import ibis
 import ibis.expr.operations as ops
 import numpy as np
+import pyarrow as pa
 from manim import (
     BLACK, BLUE_D, BOLD, DOWN, GOLD_D, GREEN, GREEN_D, GREEN_E, GREY_A, GREY_B, GREY_C, ITALIC, LEFT, MAROON_C, NORMAL,
     ORANGE, ORIGIN, PI, PINK, PURPLE_B, RED, RED_E, RIGHT, TEAL_D, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_E,
     GREY_D, AnimationGroup, Arrow, Group, Circumscribe, DashedLine, FadeIn, FadeOut, FadeTransform, Indicate, LaggedStart, Line,
-    Rectangle, ReplacementTransform, Rotate, RoundedRectangle, Scene, SurroundingRectangle, Text, Transform, TransformFromCopy, VectorizedPoint, VGroup,
+    Rectangle, ReplacementTransform, Rotate, RoundedRectangle, Succession, Scene, SurroundingRectangle, Text, Transform, TransformFromCopy, VectorizedPoint, VGroup,
     tempconfig,
 )
 
@@ -52,6 +53,7 @@ NEUTRAL = "#3a3a3a"
 TYPE_FILL = "#1f2a38"
 FACTS_FILL, FACTS_NEW, FACTS_TEXT = "#123029", "#1f5c4a", "#a8f0d4"  # the facts row; brighter when the step changed it
 WARNING_FILL = "#3d1515"
+TEST_FILL, RESULT_FILL = "#2a2840", "#3a2f10"  # the header of a test column, of the result column
 CAPTION = "#8fd3ff"
 PALETTE = [BLUE_D, ORANGE, PURPLE_B, GREEN_D, TEAL_D, MAROON_C, GOLD_D, PINK]
 
@@ -205,6 +207,50 @@ def _call_args(code: str, verb: str) -> str:
     return code[i + len(verb) + 1:-1] if i >= 0 and code.endswith(")") else code
 
 
+def _condition_tree(filter_op) -> tuple:
+    """The structure of a filter condition: ("and" | "or", [children]) or ("leaf", value op).
+
+    ibis.and_ (and several filter arguments) gives "and"; ibis.or_ and | give "or".
+    """
+    def build(p):
+        if isinstance(p, (ops.And, ops.Or)):
+            kind, children = ("and" if isinstance(p, ops.And) else "or"), []
+            for side in (p.left, p.right):
+                child = build(side)
+                children += child[1] if child[0] == kind else [child]
+            return kind, children
+        return "leaf", p
+
+    predicates = list(getattr(filter_op, "predicates", ()))
+    if len(predicates) == 1:
+        return build(predicates[0])
+    children = []
+    for p in predicates:
+        child = build(p)
+        children += child[1] if child[0] == "and" else [child]
+    return "and", children
+
+
+def _leaves(tree) -> list:
+    return [tree[1]] if tree[0] == "leaf" else [leaf for child in tree[1] for leaf in _leaves(child)]
+
+
+def _tree_text(tree, numbers: dict) -> str:
+    """The condition with each test as its number, for example '1 AND (2 OR 3)'."""
+    if tree[0] == "leaf":
+        return str(numbers[id(tree[1])])
+    parts = [_tree_text(c, numbers) if c[0] == "leaf" else f"({_tree_text(c, numbers)})" for c in tree[1]]
+    return f" {tree[0].upper()} ".join(parts)
+
+
+def _evaluate(values: list, table, rows: list[dict]) -> list[list]:
+    """The value of each expression on each of `rows` of `table`: the expressions run on a memtable of the rows."""
+    mem = ibis.memtable(pa.Table.from_pylist(rows, schema=table.schema().to_pyarrow()))
+    exprs = {f"v{k}": v.replace({table.op(): mem.op()}).to_expr() for k, v in enumerate(values)}
+    found = mem.select(**exprs).to_pyarrow().to_pylist()
+    return [[r[f"v{k}"] for k in range(len(values))] for r in found]
+
+
 def _window(step: Step):
     """(column, window function) for the first computed column that is a window function."""
     values = getattr(step.output.op(), "values", {})
@@ -268,6 +314,20 @@ def _facts_cell(text: str, width: float, changed: bool) -> VGroup:
     label = Text("\n".join(lines), font=SANS, font_size=12, color=GREY_C if lines == ["any"] else FACTS_TEXT,
                  line_spacing=0.7)  # Consolas lacks ⊆ ∪ ∅
     label.scale(min(1, (width - 0.08) / label.width, FACTS_H * 0.85 / label.height))
+    return VGroup(box, label.move_to(box))
+
+
+def _mark(value, height: float) -> Text:
+    """✔ for true, ✘ for false, – for null (a null condition does not keep the row)."""
+    mark = Text("✔" if value else "–" if value is None else "✘", font=SANS, font_size=24,
+                color=GREEN if value else GREY_C if value is None else RED)
+    return mark.scale_to_fit_height(height * 0.55)
+
+
+def _label_cell(text: str, width: float, height: float, fill=TEST_FILL) -> VGroup:
+    box = Rectangle(width=width, height=height, stroke_width=1, stroke_color=GREY_B).set_fill(fill, 1)
+    label = Text(text, font=SANS, font_size=14, color=WHITE)
+    label.scale(min(1, (width - 0.08) / label.width, height * 0.7 / label.height))
     return VGroup(box, label.move_to(box))
 
 
@@ -766,11 +826,11 @@ class DebuggerScene(Scene):
             self._put(g, x)
             x += g.width + gap * f
 
-    def _in_place(self, first: Grid, *others: Grid):
-        """Draw the grids on top of each other, with the same top-left cell."""
+    def _in_place(self, first: Grid, *others: Grid, margin: float = 2.5):
+        """Draw the grids on top of each other, with the same top-left cell. `margin` is room on the right."""
         grids = [first, *others]
-        self._scale(grids, max(g.width for g in grids) + 2.5, max(g.height for g in grids))  # room for marks and arrows
-        self._put(first, STAGE_X - max(g.width for g in grids) / 2)
+        f = self._scale(grids, max(g.width for g in grids) + margin, max(g.height for g in grids))  # room for marks and arrows
+        self._put(first, STAGE_X - (max(g.width for g in grids) + margin * f) / 2)  # centre the grid and its margin
         for g in others:
             g.shift(first.slot(-1, 0) - g.slot(-1, 0))
 
@@ -899,7 +959,55 @@ class DebuggerScene(Scene):
         self.result = grid
 
     def _filter(self, step: Step, ins: list[Sample], out: Sample):
-        self._subset(step, ins, out, test=_call_args(step.code, "filter"))
+        tree = _condition_tree(step.output.op())
+        if tree[0] == "leaf":
+            self._subset(step, ins, out, test=_call_args(step.code, "filter"))
+        else:
+            self._tests(step, ins, out, tree)
+
+    def _tests(self, step: Step, ins: list[Sample], out: Sample, tree):
+        """Each test gets a column of ✔/✘. Then, per row, the marks merge into the result (AND / OR)."""
+        s, src = ins[0], step.inputs[0]
+        leaves = _leaves(tree)
+        values = _evaluate(leaves, src, s.rows)
+        idx = [i for i in _match(out.rows, s.rows, [(c, c) for c in s.columns]) if i is not None]
+        keep = [i in idx for i in range(len(s.rows))]
+        width = _cell_width([s], s.columns)
+        grid = Grid(s, _pick_columns(s.columns, step.used, MAX_COLUMNS - 1), width, used=step.used)
+        self._in_place(grid, margin=(len(leaves) + 1) * width + 1.0)
+        self._enter(grid)
+        cw, f = grid.cell_w, grid.cell_w / width
+        rh = grid.slot(0, 0)[1] - grid.slot(1, 0)[1]
+        right = grid.slot(-1, len(grid.shown) - 1)[0] + cw / 2
+        x = lambda j: right + 0.25 * f + (j + 0.5) * cw + j * 0.06 * f  # noqa: E731
+        y = lambda r: grid.slot(r, 0)[1]  # noqa: E731
+        decorations = [VGroup() for _ in s.rows]
+        for j, leaf in enumerate(leaves):
+            self._say(f"test {j + 1}: {_expr_text(leaf)}", wait=0.2)
+            self._highlight(grid, [fl.name for fl in leaf.find(ops.Field, filter=ops.Value)])
+            header = _label_cell(f"{j + 1}: {_expr_text(leaf)}", cw, rh).move_to([x(j), y(-1), 0])
+            marks = [_mark(values[r][j], rh).move_to([x(j), y(r), 0]) for r in range(len(s.rows))]
+            self.play(FadeIn(header), LaggedStart(*[FadeIn(m, scale=1.5) for m in marks], lag_ratio=0.2),
+                      run_time=0.5 + 0.2 * len(marks))
+            for row, m in zip(decorations, marks):
+                row.add(m)
+        numbers = {id(leaf): j + 1 for j, leaf in enumerate(leaves)}
+        rule = _tree_text(tree, numbers)
+        meaning = {"and": "a row stays when every test passes", "or": "a row stays when at least one test passes"}
+        mixed = any(c[0] != "leaf" for c in tree[1])
+        self._say(f"{rule}: " + ("a row stays when the whole condition is true" if mixed else meaning[tree[0]]))
+        n = len(leaves)
+        header = _label_cell(rule, cw, rh, RESULT_FILL).move_to([x(n), y(-1), 0])
+        results = [_mark(k, rh).move_to([x(n), y(r), 0]) for r, k in enumerate(keep)]
+        self.play(FadeIn(header))
+        self._fly([[(m, results[r]) for m in decorations[r]] for r in range(len(s.rows))], run_time=0.8 + 0.3 * len(results),
+                  lag_ratio=0.25)
+        for row, m in zip(decorations, results):
+            row.add(m)
+        self._subset_marks(grid, keep, marks=False, extra=decorations)
+        self._retitle(grid, out)
+        self._refresh_facts(grid, out)
+        self.result = grid
 
     def _distinct(self, step: Step, ins: list[Sample], out: Sample):
         self._subset(step, ins, out, test="is this the first time that the row appears?")
@@ -995,14 +1103,19 @@ class DebuggerScene(Scene):
         if anims:
             self.play(*anims, run_time=0.8)
 
-    def _subset_marks(self, grid: Grid, keep: list[bool], marks=True):
-        """Optional ✔/✘ marks; the rows to remove turn red and leave; the other rows slide up."""
-        signs = [Text("✔" if k else "✘", font=SANS, font_size=24, color=GREEN if k else RED) for k in keep] if marks else []
-        for r, sign in enumerate(signs):
-            sign.scale_to_fit_height((grid.slot(0, 0)[1] - grid.slot(1, 0)[1]) * 0.6)
-            sign.move_to(grid.slot(r, len(grid.shown)) + LEFT * grid.cell_w * 0.3)
-        if signs:
-            self.play(LaggedStart(*[FadeIn(m, scale=1.6) for m in signs], lag_ratio=0.35), run_time=0.5 * len(signs))
+    def _subset_marks(self, grid: Grid, keep: list[bool], marks=True, extra=None):
+        """Optional ✔/✘ marks; the rows to remove turn red and leave; the other rows slide up.
+
+        `extra` gives, for each row, mobjects (test marks) that move and leave with the row.
+        """
+        signs = extra if extra is not None else [Text("✔" if k else "✘", font=SANS, font_size=24, color=GREEN if k else RED)
+                                                  for k in keep] if marks else []
+        if extra is None:
+            for r, sign in enumerate(signs):
+                sign.scale_to_fit_height((grid.slot(0, 0)[1] - grid.slot(1, 0)[1]) * 0.6)
+                sign.move_to(grid.slot(r, len(grid.shown)) + LEFT * grid.cell_w * 0.3)
+            if signs:
+                self.play(LaggedStart(*[FadeIn(m, scale=1.6) for m in signs], lag_ratio=0.35), run_time=0.5 * len(signs))
         gone = [r for r, k in enumerate(keep) if not k]
         if not gone:
             return
@@ -1134,7 +1247,10 @@ class DebuggerScene(Scene):
             boxes = [res.cell(r, name)[0] for r in range(len(out.rows))]
             self.play(FadeIn(res.header(name)), *[FadeIn(b) for b in boxes], run_time=0.6)
             groups = [[(inp.cell(i, f), res.cell(k, name)) for f in reads] for k, i in enumerate(idx) if i is not None and reads]
-            if groups:
+            value = getattr(step.output.op(), "values", {}).get(name)
+            if isinstance(value, ops.IfElse):
+                self._ifelse(step, name, value, s, inp, res, idx)
+            elif groups:
                 self._say("the same thing happens on every row", wait=0)
                 self._fly(groups, run_time=1.4 + 0.35 * len(groups), lag_ratio=0.3)
             else:
@@ -1147,6 +1263,38 @@ class DebuggerScene(Scene):
                 self.play(Circumscribe(res.type_cell(name), color=GREEN, buff=0.03), run_time=1)
         self._settle(*([res] if inplace or reshape else [inp, res]))
         self.result = res
+
+    def _ifelse(self, step: Step, name: str, value, s: Sample, inp: Grid, res: Grid, idx: list):
+        """ibis.ifelse: each row tests the condition; the value of the chosen branch moves into the new cell."""
+        flags = [r[0] for r in _evaluate([value.bool_expr], step.inputs[0], s.rows)]
+        test, yes, no = (_expr_text(v) for v in (value.bool_expr, value.true_expr, value.false_null_expr))
+        self._say(f"{name}: if {test} then {yes}, else {no}", wait=0.2)
+        cw = res.cell_w
+        rh = res.slot(0, 0)[1] - res.slot(1, 0)[1]
+        chips = VGroup(_label_cell(f"✔ → {yes}", cw * 1.3, rh, TEST_FILL), _label_cell(f"✘ → {no}", cw * 1.3, rh, TEST_FILL))
+        chips.arrange(DOWN, buff=0.08).next_to(res.header(name), RIGHT, buff=0.3 + cw * 0.3).align_to(res.header(name), UP)
+        self.play(FadeIn(chips, shift=LEFT * 0.2))
+        tested = [f.name for f in value.bool_expr.find(ops.Field, filter=ops.Value) if f.name in inp.shown]
+
+        def source(branch, i, chip):
+            return inp.cell(i, branch.name) if isinstance(branch, ops.Field) and branch.name in inp.shown else chip[1]
+
+        anims, copies, done, marks = [], [], [], []
+        for k, i in enumerate(idx):
+            if i is None:
+                continue
+            flag = flags[i]
+            mark = _mark(flag, rh).next_to(res.cell(k, name), RIGHT, buff=0.08)
+            marks.append(mark)
+            moving = source(value.true_expr if flag else value.false_null_expr, i, chips[0] if flag else chips[1]).copy()
+            copies.append(moving)
+            done.append(res.cell(k, name))
+            anims.append(Succession(AnimationGroup(*[Indicate(inp.cell(i, t), color=YELLOW) for t in tested], FadeIn(mark, scale=1.5)),
+                                    Transform(moving, res.cell(k, name).copy())))
+        self.play(LaggedStart(*anims, lag_ratio=0.35), run_time=1.2 + 0.6 * len(anims))
+        self.remove(*copies)
+        self.add(*done)
+        self.play(FadeOut(chips), *[FadeOut(m) for m in marks], run_time=0.5)  # the next new column needs the room
 
     def _window(self, step: Step, ins: list[Sample], out: Sample):
         """Colour the partitions, sort the rows, then slide the window frame down the rows."""

@@ -32,6 +32,8 @@ The script runs as before. At exit, the video goes to `media/videos/480p15/<scri
 | Operation | Animation |
 | --- | --- |
 | `filter` | Each row gets ✔ or ✘. The failed rows turn red and leave. The other rows slide up. |
+| `filter` with several tests (`ibis.and_`, `ibis.or_`, `&`, `\|`) | Each test gets a column of ✔/✘, with the columns that it reads highlighted. Then, per row, the marks merge into the result column (`1 AND 2`, `1 OR 2`, `1 AND (2 OR 3)`), and the failed rows leave. A null test shows `–`: it does not keep the row. |
+| `ibis.ifelse` in `mutate` or `select` | A legend shows the two branches (`✔ → 'large'`, `✘ → 'small'`). Per row, the cells of the test flash, the row gets ✔/✘, and the value of the chosen branch moves into the new cell: the row's own cell for a column, the legend for a constant. |
 | `distinct`, `drop_null`, semi and anti `join` | The same as `filter`, with the test of the operation. |
 | `limit`, `head`, `sample` | A cut line or a count, then the removed rows leave. |
 | `order_by` | The sort column is yellow, an arrow shows the direction, and the rows move along arcs to their new positions. |
@@ -92,10 +94,12 @@ python examples/pivots.py            # pivot_wider, mutate, pivot_longer
 python examples/rolling.py           # rolling sum, cumulative sum, order_by, limit
 python examples/table_ops.py         # union, distinct, fill_null, cast, new columns, select, rename, unnest, intersect
 python examples/customer_health.py   # a realistic job: 5 tables, chains, a loop, a branch, 2 left joins, a rank (22 steps)
+python examples/conditions.py        # ibis.and_ and ibis.or_ in filters, ibis.ifelse in new columns
 IBIS_ANIM=0 python my_script.py      # run without the video
 python tests/test_tracer.py          # checks of the tracer
 python tests/test_scope.py           # checks of the tables panel plan
 python tests/test_facts.py           # checks of the facts and warnings
+python tests/test_conditions.py      # checks of the conditions of filters and ifelse
 ```
 
 To render one function only, call `ibis_anim.visualize(func, *args)`. To get the steps without a video, call `ibis_anim.trace(func, *args)`.
