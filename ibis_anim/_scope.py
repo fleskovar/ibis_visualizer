@@ -22,6 +22,7 @@ class ScopeFrame:
     replaced: object | None  # the input whose place the output takes
     expired: list  # tables that leave the panel after the step
     dead: set  # tables on the panel during the step that no later step reads
+    dead_after: set  # tables on the panel after the step that no later step reads
 
 
 def table_names(steps) -> dict:
@@ -38,6 +39,21 @@ def table_names(steps) -> dict:
     if steps:
         names.setdefault(steps[-1].output.op(), "result")
     return names
+
+
+def chains(steps, names: dict) -> list[list[int]]:
+    """Runs of steps where each step reads the unnamed result of the step before, as in `t.a().b().c()`."""
+    last_use = {t.op(): i for i, step in enumerate(steps) for t in step.inputs}
+    runs = []
+    for i, step in enumerate(steps):
+        prev = steps[i - 1] if i else None
+        linked = (prev is not None and step.inputs[0].op() == prev.output.op() and step.function == prev.function
+                  and not names.get(prev.output.op(), "").isidentifier() and last_use.get(prev.output.op()) == i)
+        if linked:
+            runs[-1].append(i)
+        else:
+            runs.append([i])
+    return runs
 
 
 def plan(steps, keep_idle: int = 2) -> list[ScopeFrame]:
@@ -61,5 +77,6 @@ def plan(steps, keep_idle: int = 2) -> list[ScopeFrame]:
         idle_since |= {k: i for k in [*inputs, out]}
         expired = [k for k in panel if k not in (out, final) and last_use.get(k, -1) <= i and i - idle_since[k] >= keep_idle]
         panel = [k for k in panel if k not in expired]
-        frames.append(ScopeFrame(shown, inputs, out, list(panel), replaced, expired, dead))
+        dead_after = {k for k in panel if last_use.get(k, -1) <= i and k != final}
+        frames.append(ScopeFrame(shown, inputs, out, list(panel), replaced, expired, dead, dead_after))
     return frames

@@ -26,7 +26,7 @@ from manim import (
     tempconfig,
 )
 
-from ibis_anim._scope import ScopeFrame, plan, table_names
+from ibis_anim._scope import ScopeFrame, chains, plan, table_names
 from ibis_anim._tracer import Step, _names, recording, trace
 
 MONO = "Consolas" if sys.platform == "win32" else "Monospace"
@@ -35,12 +35,15 @@ PREVIEW_ROWS = 6
 MAX_COLUMNS = 6
 MAX_RESULT_ROWS = 8
 ROW_H = 0.4
-ZONE_BOTTOM = -3.8
-DIVIDER_X = -3.95  # left of it: call stack and tables; right of it: code and stage
-SIDEBAR_X = -5.5
+BAR_BOTTOM = 3.08  # top bar: step, call path and the current statement
+CODE_Y = 3.3
+STRIP_Y, CAPTION_Y = 2.72, 2.32  # the pipeline of the statement, then the caption of the phase
+ZONE_TOP, ZONE_BOTTOM = 1.95, -2.05  # the stage
+DIVIDER_X = -3.95  # left of it: the trace; right of it: the stage
 STAGE_X, STAGE_W = 1.6, 10.6
-CARD_W, CARD_H = 2.95, 0.6
-CARDS_TOP, CARDS_BOTTOM = 1.55, -3.9
+TRACE_LINES = 14
+SHELF_LINE, SHELF_Y, SHELF_LEFT, SHELF_RIGHT = -2.17, -3.28, -6.95, 6.95  # the tables in scope
+THUMB_W, THUMB_H = 2.3, 1.3
 CARD_FILL = "#1c1c1c"
 CURRENT_LINE = "#3a3a14"
 NEUTRAL = "#3a3a3a"
@@ -227,7 +230,8 @@ def _char_width() -> float:
 
 
 def _cell_width(samples: list[Sample], columns) -> float:
-    texts = [*columns, *(_fmt(r[c]) for s in samples for r in s.rows for c in columns if c in r)]
+    texts = [*columns, *(_fmt(r[c]) for s in samples for r in s.rows for c in columns if c in r),
+             *(s.types.get(c, "") for s in samples for c in columns)]
     return min(max(map(len, texts)) * _char_width() + 0.3, 2.2)
 
 
@@ -257,7 +261,7 @@ def _pick_columns(columns, important, limit=MAX_COLUMNS) -> list[str]:
 class Grid(VGroup):
     """A table drawn as cells of equal size. Row -1 is the header row."""
 
-    def __init__(self, sample: Sample, shown, width: float, used=(), created=(), keys=(), colors=None, types=False):
+    def __init__(self, sample: Sample, shown, width: float, used=(), created=(), keys=(), colors=None, types=True):
         super().__init__()
         self.sample, self.shown, self.cells = sample, list(shown), {}
         for j, name in enumerate(self.shown):
@@ -324,70 +328,98 @@ class Grid(VGroup):
 
 
 class Card(VGroup):
-    """One table on the tables panel: its name, shape, origin and columns."""
+    """One table on the tables shelf: name, shape, and a mini table of its first rows."""
 
-    def __init__(self, name: str, table, origin: str, rows: int):
+    def __init__(self, name: str, table, rows: int, preview: list[dict]):
         super().__init__()
-        self.box = RoundedRectangle(corner_radius=0.06, width=CARD_W, height=CARD_H, stroke_width=1.2, stroke_color=GREY_B)
+        self.box = RoundedRectangle(corner_radius=0.07, width=THUMB_W, height=THUMB_H, stroke_width=1.2, stroke_color=GREY_B)
         self.box.set_fill(CARD_FILL, 1)
-        title = Text(name, font=SANS, font_size=17, weight=BOLD)
-        if title.width > CARD_W * 0.55:
-            title.scale_to_fit_width(CARD_W * 0.55)
+        title = Text(name, font=SANS, font_size=16, weight=BOLD)
+        if title.width > THUMB_W * 0.62:
+            title.scale_to_fit_width(THUMB_W * 0.62)
         shape = Text(f"{rows} × {len(table.columns)}", font=MONO, font_size=13, color=GREY_A)
-        columns = ", ".join(table.columns)
-        detail = Text((f"{origin} · " if origin else "") + (columns if len(columns) <= 44 else columns[:43] + "…"),
-                      font=MONO, font_size=11, color=GREY_B)
-        if detail.width > CARD_W - 0.2:
-            detail.scale_to_fit_width(CARD_W - 0.2)
-        title.move_to(self.box.get_corner(UL) + [0.1 + title.width / 2, -0.18, 0])
-        shape.move_to(self.box.get_corner(UR) + [-0.1 - shape.width / 2, -0.18, 0])
-        detail.move_to(self.box.get_corner(DOWN + LEFT) + [0.1 + detail.width / 2, 0.15, 0])
-        self.add(self.box, title, shape, detail)
+        title.move_to(self.box.get_corner(UL) + [0.1 + title.width / 2, -0.17, 0])
+        shape.move_to(self.box.get_corner(UR) + [-0.1 - shape.width / 2, -0.17, 0])
+        columns = table.columns[:4]
+        cw, rh = (THUMB_W - 0.16) / max(len(columns), 1), 0.22
+        top_left = self.box.get_corner(UL) + [0.08, -0.36, 0]
+        mini = VGroup()
+        for j, name_ in enumerate(columns):
+            for r in range(-1, min(3, len(preview))):
+                text = name_ if r < 0 else _fmt(preview[r].get(name_))
+                cell = Rectangle(width=cw, height=rh, stroke_width=0.6, stroke_color=GREY_D)
+                cell.set_fill(NEUTRAL if r < 0 else CARD_FILL, 1)
+                label = Text(text[:12], font=MONO, font_size=11, color=WHITE if r < 0 else GREY_A)
+                label.scale(min(1, (cw - 0.05) / label.width, rh * 0.75 / label.height))
+                cell.move_to(top_left + [(j + 0.5) * cw, -(r + 1.5) * rh, 0])
+                mini.add(VGroup(cell, label.move_to(cell)))
+        more = len(table.columns) - len(columns)
+        self.add(self.box, title, shape, mini)
+        if more:
+            self.add(Text(f"+{more} more columns", font=SANS, font_size=11, color=GREY_B)
+                     .move_to(self.box.get_bottom() + [0, 0.12, 0]))
 
     def set_state(self, state: str):
         """input: read by the step; output: made by the step; idle: in scope; dead: no later step reads it."""
-        color, width, opacity = {"input": (YELLOW, 3, 1), "output": (GREEN, 3, 1), "idle": (GREY_B, 1.2, 0.7),
-                                 "dead": (GREY_C, 1, 0.3)}[state]
+        color, width, opacity = {"input": (YELLOW, 3, 1), "output": (GREEN, 3, 1), "idle": (GREY_B, 1.2, 0.85),
+                                 "dead": (GREY_C, 1, 0.35)}[state]
         self.set_opacity(opacity)
         self.box.set_stroke(color, width, opacity)
         return self
 
 
-def _card_slots(n: int) -> list[tuple[np.ndarray, float]]:
-    """Centre and height of each card on the panel. Many cards get smaller."""
-    gap = min(CARD_H + 0.1, (CARDS_TOP - CARDS_BOTTOM) / max(n, 1))
-    height = min(CARD_H, gap - 0.08)
-    return [(np.array([SIDEBAR_X, CARDS_TOP - gap * (j + 0.5), 0]), height) for j in range(n)]
+CARD_SCALE = {"input": 1.15, "output": 1.15, "idle": 1.0, "dead": 0.72}  # active tables are drawn larger
 
 
-def _source_lines(frame, around: int = 2) -> list[tuple[int, str]]:
-    lines = [(n, linecache.getline(frame.filename, n).rstrip()) for n in range(max(1, frame.lineno - around), frame.lineno + around + 1)]
-    return [(n, text) for n, text in lines if text or n == frame.lineno]
+def _card_slots(states: list[str]) -> list[tuple[np.ndarray, float]]:
+    """Centre and width of each card on the shelf, left to right. Many cards get smaller."""
+    widths = [THUMB_W * CARD_SCALE[s] for s in states]
+    gap = 0.15
+    fit = min(1.0, (SHELF_RIGHT - SHELF_LEFT - gap * len(widths)) / max(sum(widths), 0.01))
+    slots, x = [], SHELF_LEFT
+    for w in widths:
+        slots.append((np.array([x + w * fit / 2, SHELF_Y, 0]), w * fit))
+        x += w * fit + gap
+    return slots
+
+
+def _chip_text(step: Step) -> str:
+    """The call of a step without its receiver: `mutate(line_total=…)`, shortened."""
+    code = " ".join(step.code.split())
+    dot = code.find(".")
+    if dot > 0 and code[:dot].isidentifier():
+        code = code[dot + 1:]
+    return code if len(code) <= 34 else code[:32] + "…)"
 
 
 class DebuggerScene(Scene):
-    """A debugger view: call stack and tables on the left, the code and the current step on the right."""
+    """A debugger view: the trace on the left, the current statement on top, the step in the middle,
+    and the tables in scope on a shelf at the bottom."""
 
     def __init__(self, steps: list[Step], title: str, **kwargs):
         self.steps, self.title = steps, title
         self.frames, self.names = plan(steps), table_names(steps)
-        self.origins = {s.output.op(): f"{s.function}()" for s in steps}
-        self.chrome = self.caption = self.stack_panel = self.result = self.code = None
-        self.cards, self.rows = {}, {}
-        self.zone_top = 1.2
-        self.sidebar = VGroup(
-            Text("CALL STACK", font=SANS, font_size=15, weight=BOLD, color=GREY_B).move_to([SIDEBAR_X - 0.75, 3.75, 0]),
-            Text("TABLES", font=SANS, font_size=15, weight=BOLD, color=GREY_B).move_to([SIDEBAR_X - 0.95, CARDS_TOP + 0.25, 0]),
-            Line([DIVIDER_X, 4, 0], [DIVIDER_X, -4, 0], stroke_width=1, color=GREY_D),
+        self.chain_of = {i: run for run in chains(steps, self.names) for i in run}
+        self.chrome = self.caption = self.trace_panel = self.result = None
+        self.cards, self.rows, self.previews = {}, {}, {}
+        self.zone_top = ZONE_TOP
+        self.trace_lines = self._trace_lines()
+        self.frame = VGroup(
+            Line([-7.1, BAR_BOTTOM, 0], [7.1, BAR_BOTTOM, 0], stroke_width=1, color=GREY_D),
+            Line([DIVIDER_X, BAR_BOTTOM, 0], [DIVIDER_X, SHELF_LINE, 0], stroke_width=1, color=GREY_D),
+            Line([-7.1, SHELF_LINE, 0], [7.1, SHELF_LINE, 0], stroke_width=1, color=GREY_D),
+            Text("TRACE", font=SANS, font_size=14, weight=BOLD, color=GREY_B).move_to([SHELF_LEFT + 0.3, BAR_BOTTOM - 0.18, 0]),
+            Text("TABLES IN SCOPE", font=SANS, font_size=13, weight=BOLD, color=GREY_B)
+            .move_to([SHELF_LEFT + 0.75, SHELF_LINE - 0.15, 0]),
         )
         super().__init__(**kwargs)
 
     def construct(self):
         self.next_section("00_overview")
         self._overview()
-        self.play(FadeIn(self.sidebar))
-        for i, (step, frame) in enumerate(zip(self.steps, self.frames), 1):
-            self.next_section(f"{i:02d}_{step.function}_{step.op.split()[-1]}")
+        self.play(FadeIn(self.frame))
+        for i, (step, frame) in enumerate(zip(self.steps, self.frames)):
+            self.next_section(f"{i + 1:02d}_{step.function}_{step.op.split()[-1]}")
             self._header(i, step)
             self._activate(frame)
             self.result = None
@@ -407,61 +439,119 @@ class DebuggerScene(Scene):
         self.wait(2)
         self.play(FadeOut(title), FadeOut(listing))
 
+    # -- the debugger frame ------------------------------------------------------------------
+
+    def _trace_lines(self) -> list[tuple[str, int, str, int]]:
+        """(kind, step, text, depth): one line per function call, and one line per step under it."""
+        lines, previous = [], None
+        for i, step in enumerate(self.steps):
+            calls = tuple(f.name for f in step.stack if f.name != "<module>") or ("?",)
+            if calls != previous:
+                lines.append(("call", i, f"{calls[-1]}()", len(calls) - 1))
+                previous = calls
+            lines.append(("step", i, f"{i + 1:>2} {step.op}", len(calls) - 1))
+        return lines
+
+    def _trace(self, i: int) -> VGroup:
+        """The trace around step i: the steps that ran, the current step, and the steps to come."""
+        current = next(k for k, (kind, s, _, _) in enumerate(self.trace_lines) if kind == "step" and s == i)
+        start = max(0, min(current - 5, len(self.trace_lines) - TRACE_LINES))
+        panel = VGroup()
+        for k, (kind, s, text, depth) in enumerate(self.trace_lines[start:start + TRACE_LINES]):
+            y = BAR_BOTTOM - 0.48 - k * 0.33
+            indent = SHELF_LEFT + 0.12 + depth * 0.18
+            if kind == "call":
+                inside = s <= i and all(not (kk == "call" and i >= ss > s) for kk, ss, _, _ in self.trace_lines)
+                line = Text(text, font=MONO, font_size=13, weight=BOLD, color=WHITE if inside else GREY_C)
+                panel.add(line.move_to([indent + line.width / 2, y, 0]))
+                continue
+            done, now = s < i, s == i
+            icon = Text("✔" if done else "▸" if now else "·", font=SANS, font_size=13,
+                        color=GREEN if done else YELLOW if now else GREY_D)
+            line = Text(text, font=MONO, font_size=13, color=GREY_B if done else YELLOW_A if now else GREY_C)
+            icon.move_to([indent + 0.3, y, 0])
+            line.move_to([indent + 0.45 + line.width / 2, y, 0])
+            if line.get_right()[0] > DIVIDER_X - 0.1:
+                line.scale_to_fit_width(DIVIDER_X - 0.1 - line.get_left()[0], about_edge=LEFT)
+            row = VGroup(icon, line)
+            if now:
+                band = Rectangle(width=DIVIDER_X - SHELF_LEFT + 0.1, height=0.3, stroke_width=0).set_fill(CURRENT_LINE, 1)
+                row = VGroup(band.move_to([(SHELF_LEFT + DIVIDER_X) / 2, y, 0]), icon, line)
+            panel.add(row)
+        if start > 0:
+            panel.add(Text("⋮", font=SANS, font_size=13, color=GREY_C).move_to([SHELF_LEFT + 2.6, BAR_BOTTOM - 0.18, 0]))
+        return panel
+
+    def _strip(self, i: int) -> VGroup:
+        """The statement as a pipeline: source → each call of the chain → result, with the current call lit."""
+        run = self.chain_of[i]
+        source = self.names.get(self.steps[run[0]].inputs[0].op(), "table")
+        result = self.names.get(self.steps[run[-1]].output.op(), "result")
+        items = [Text(source, font=SANS, font_size=16, weight=BOLD, color=GREY_A)]
+        for k in run:
+            done, now = k < i, k == i
+            text = Text(_chip_text(self.steps[k]), font=MONO, font_size=14, color=GREY_B if done else YELLOW_A if now else GREY_C)
+            box = RoundedRectangle(corner_radius=0.08, width=text.width + 0.24, height=text.height + 0.2,
+                                   stroke_width=2.5 if now else 1, stroke_color=YELLOW if now else GREY_D)
+            box.set_fill(CURRENT_LINE if now else CARD_FILL, 1)
+            items.append(VGroup(box, text.move_to(box)))
+        items.append(Text(result, font=SANS, font_size=16, weight=BOLD, color=GREEN if i == run[-1] else GREY_C))
+        strip = VGroup()
+        for k, item in enumerate(items):
+            if k:
+                strip.add(Text("→", font=MONO, font_size=16, color=GREY_B))
+            strip.add(item)
+        strip.arrange(RIGHT, buff=0.12)
+        if strip.width > STAGE_W:
+            strip.scale_to_fit_width(STAGE_W)
+        return strip.move_to([DIVIDER_X + 0.25 + strip.width / 2, STRIP_Y, 0])
+
     def _header(self, i: int, step: Step):
-        """The step title, the code around the current line, and the call stack."""
+        """Top bar: step, operation, call path and the current statement. Left: the trace. Middle: the pipeline."""
         frame = step.stack[-1] if step.stack else None
-        left = DIVIDER_X + 0.25
-        op = Text(step.op.upper(), font=SANS, font_size=28, weight=BOLD)
-        op.move_to([left + op.width / 2, 3.72, 0])
-        where = Text(f"{os.path.basename(frame.filename)} › {frame.name}()" if frame else "", font=MONO, font_size=14, color=GREY_B)
-        where.next_to(op, RIGHT, buff=0.3, aligned_edge=DOWN)
-        counter = Text(f"step {i}/{len(self.steps)}", font=SANS, font_size=18, color=GREY_B).to_corner(UR, buff=0.3)
-        lines = _source_lines(frame) if frame else []
-        if not any(text for _, text in lines):
-            lines = [(frame.lineno if frame else 0, step.code)]
-        code = VGroup()
-        for n, text in lines:
-            current = frame is not None and n == frame.lineno
-            code.add(Text(f"{'→' if current else ' '}{n:>4}  {text[:110]}", font=MONO, font_size=15,
-                          color=YELLOW_A if current else GREY_B))
-        code.arrange(DOWN, buff=0.1, aligned_edge=LEFT)
-        if code.width > STAGE_W:
-            code.scale_to_fit_width(STAGE_W)
-        code.move_to([left + code.width / 2, 3.3 - code.height / 2, 0])
-        current = next((line for (n, _), line in zip(lines, code) if frame and n == frame.lineno), code[0])
-        band = Rectangle(width=STAGE_W + 0.3, height=current.height + 0.1, stroke_width=0).set_fill(CURRENT_LINE, 1)
-        band.move_to([left - 0.1 + band.width / 2, current.get_center()[1], 0])
-        chrome = VGroup(band, op, where, counter, code)
-        frames = [f for f in reversed(step.stack) if f.name != "<module>"][:5]
-        stack = VGroup(*[Text(f"{'▸' if k == 0 else ' '} {f.name}", font=MONO, font_size=15, color=YELLOW_A if k == 0 else GREY_B)
-                         for k, f in enumerate(frames)]).arrange(DOWN, buff=0.1, aligned_edge=LEFT)
-        stack.move_to([SIDEBAR_X - 1.4 + stack.width / 2, 3.45 - stack.height / 2, 0])
+        op = Text(step.op.upper(), font=SANS, font_size=26, weight=BOLD)
+        op.move_to([SHELF_LEFT + op.width / 2, 3.72, 0])
+        calls = " › ".join(f.name for f in step.stack if f.name != "<module>")
+        path = Text(f"{calls}()" if calls else "", font=MONO, font_size=15, color=GREY_A)
+        path.next_to(op, RIGHT, buff=0.35, aligned_edge=DOWN)
+        counter = Text(f"step {i + 1}/{len(self.steps)}", font=SANS, font_size=17, color=GREY_B).to_corner(UR, buff=0.25)
+        statement = linecache.getline(frame.filename, frame.lineno).strip() if frame else ""
+        code = Text(f"{frame.lineno if frame else '':>4}  {(statement or step.code)[:130]}", font=MONO, font_size=15, color=YELLOW_A)
+        where = Text(f"{os.path.basename(frame.filename)}:{frame.lineno}" if frame else "", font=MONO, font_size=13, color=GREY_C)
+        where.move_to([7.0 - where.width / 2, CODE_Y, 0])
+        if code.width > where.get_left()[0] - SHELF_LEFT - 0.3:
+            code.scale_to_fit_width(where.get_left()[0] - SHELF_LEFT - 0.3)
+        code.move_to([SHELF_LEFT + code.width / 2, CODE_Y, 0])
+        band = Rectangle(width=14.2, height=0.36, stroke_width=0).set_fill(CURRENT_LINE, 1).move_to([0, CODE_Y, 0])
+        chrome = VGroup(band, op, path, counter, code, where, self._strip(i))
+        trace = self._trace(i)
         anims = [FadeTransform(self.chrome, chrome) if self.chrome else FadeIn(chrome)]
-        anims.append(FadeTransform(self.stack_panel, stack) if self.stack_panel else FadeIn(stack))
+        anims.append(FadeTransform(self.trace_panel, trace) if self.trace_panel else FadeIn(trace))
         self.play(*anims, run_time=0.6)
-        self.chrome, self.stack_panel, self.code = chrome, stack, code
-        self.zone_top = code.get_bottom()[1] - 0.7
+        self.chrome, self.trace_panel = chrome, trace
 
     def _card(self, key) -> Card:
         if key not in self.rows:
-            self.rows[key] = _count(key.to_expr())
-        return Card(self.names.get(key, "table"), key.to_expr(), self.origins.get(key, ""), self.rows[key])
+            table = key.to_expr()
+            self.rows[key] = _count(table)
+            self.previews[key] = table.head(3).to_pyarrow().to_pylist()
+        return Card(self.names.get(key, "table"), key.to_expr(), self.rows[key], self.previews[key])
 
     def _activate(self, frame: ScopeFrame):
-        """New tables join the panel; the step's inputs light up; the others dim."""
+        """New tables join the shelf; the step's inputs light up and grow; the others dim."""
+        states = ["input" if k in frame.inputs else "dead" if k in frame.dead else "idle" for k in frame.shown]
         anims = []
-        for key, (pos, height) in zip(frame.shown, _card_slots(len(frame.shown))):
-            state = "input" if key in frame.inputs else "dead" if key in frame.dead else "idle"
+        for key, state, (pos, width) in zip(frame.shown, states, _card_slots(states)):
             if key not in self.cards:
                 self.cards[key] = card = self._card(key).set_state(state)
-                anims.append(FadeIn(card.scale_to_fit_height(height).move_to(pos), shift=RIGHT * 0.4))
+                anims.append(FadeIn(card.scale_to_fit_width(width).move_to(pos), shift=UP * 0.3))
             else:
-                anims.append(self.cards[key].animate.set_state(state).scale_to_fit_height(height).move_to(pos))
+                anims.append(self.cards[key].animate.set_state(state).scale_to_fit_width(width).move_to(pos))
         self.play(*anims, run_time=0.7)
         self.play(*[Circumscribe(self.cards[k], color=YELLOW, buff=0.04) for k in frame.inputs], run_time=0.8)
 
     def _enter(self, *grids):
-        """Each input table grows out of its card on the panel."""
+        """Each input table grows out of its card on the shelf."""
         anims = []
         for g in grids:
             card = self.cards.get(g.sample.source)
@@ -469,38 +559,40 @@ class DebuggerScene(Scene):
         self.play(*anims, run_time=0.9)
 
     def _finish(self, step: Step, frame: ScopeFrame):
-        """The result shrinks into its card; replaced and expired cards leave; the panel closes up."""
+        """The result shrinks into its card; replaced and expired cards leave; the shelf closes up."""
         persistent = {id(m) for m in self._persistent()}
         result = self.result or VGroup(*[m for m in self.mobjects if id(m) not in persistent])
         family = {id(m) for m in result.get_family()}
         stage = [m for m in self.mobjects if id(m) not in persistent and not family & {id(x) for x in m.get_family()}]
-        slots = dict(zip(frame.after, _card_slots(len(frame.after))))
-        pos, height = slots.get(frame.output, (np.array([SIDEBAR_X, CARDS_BOTTOM, 0]), CARD_H))
-        card = self._card(frame.output).set_state("output").scale_to_fit_height(height).move_to(pos)
+        states = ["output" if k == frame.output else "dead" if k in frame.dead_after else "idle" for k in frame.after]
+        slots = dict(zip(frame.after, _card_slots(states)))
+        pos, width = slots[frame.output]
+        card = self._card(frame.output).set_state("output").scale_to_fit_width(width).move_to(pos)
         anims = [FadeOut(m) for m in stage] + [FadeOut(result, target_position=pos, scale=0.12), FadeIn(card, scale=0.7)]
         if self.caption:
             anims.append(FadeOut(self.caption))
         for key in [frame.replaced, *frame.expired]:
             if key is not None and key in self.cards:
-                anims.append(FadeOut(self.cards.pop(key), shift=LEFT * 0.4 if key != frame.replaced else ORIGIN))
-        for key, (p, h) in slots.items():
+                anims.append(FadeOut(self.cards.pop(key), shift=DOWN * 0.4 if key != frame.replaced else ORIGIN))
+        for key, state in zip(frame.after, states):
             if key in self.cards:
-                anims.append(self.cards[key].animate.scale_to_fit_height(h).move_to(p))
+                p, w = slots[key]
+                anims.append(self.cards[key].animate.set_state(state).scale_to_fit_width(w).move_to(p))
         self.play(*anims, run_time=1.3)
         self.cards[frame.output], self.caption = card, None
         self._settle()
 
     def _persistent(self) -> list:
-        return [m for m in (self.sidebar, self.stack_panel, self.chrome, self.caption, *self.cards.values()) if m is not None]
+        return [m for m in (self.frame, self.trace_panel, self.chrome, self.caption, *self.cards.values()) if m is not None]
 
     # -- helpers -----------------------------------------------------------------------------
 
     def _say(self, text: str, wait=0.6):
-        """Show the caption of the current phase under the code."""
-        new = Text("▸ " + textwrap.fill(text, 90), font=SANS, font_size=19, color=CAPTION)
+        """Show the caption of the current phase under the pipeline."""
+        new = Text("▸ " + textwrap.fill(text, 95), font=SANS, font_size=18, color=CAPTION)
         if new.width > STAGE_W:
             new.scale_to_fit_width(STAGE_W)
-        new.next_to(self.code, DOWN, buff=0.18).align_to([DIVIDER_X + 0.25, 0, 0], LEFT)
+        new.move_to([DIVIDER_X + 0.25 + new.width / 2, CAPTION_Y - new.height / 2 + 0.12, 0])
         self.play(FadeTransform(self.caption, new) if self.caption else FadeIn(new), run_time=0.5)
         self.caption = new
         if wait:
@@ -831,9 +923,8 @@ class DebuggerScene(Scene):
         out, idx = _in_input_order(out, _match(out.rows, s.rows, list(carried.items())))
         width = _cell_width([s, out], [*in_shown, *out_shown])
         retyped = [c for c in computed if c in s.types and out.types.get(c) != s.types[c]]
-        types = verb in ("cast", "try_cast") or bool(retyped)  # show the type row when a type changes
-        inp = Grid(s, in_shown, width, used=[*used, *renamed], types=types)
-        res = Grid(out, out_shown, width, created=[*computed, *renamed.values()], types=types)
+        inp = Grid(s, in_shown, width, used=[*used, *renamed])
+        res = Grid(out, out_shown, width, created=[*computed, *renamed.values()])
         inplace = out_shown[: len(in_shown)] == in_shown  # the table only grows to the right
         reshape = not inplace and not new  # columns leave, move or change name, in place
         self._in_place(inp, res) if inplace or reshape else self._side_by_side([inp, res], gap=1.5)
