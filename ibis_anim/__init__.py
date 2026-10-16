@@ -15,11 +15,20 @@ from pathlib import Path
 import ibis
 from ibis import *  # noqa: F403
 
-from ibis_anim import _tracer
+from ibis_anim import _derive, _tracer
+from ibis_anim._facts import declare
+from ibis_anim._scope import table_names
 from ibis_anim._scene import render, visualize
 from ibis_anim._tracer import Step, install, recording, trace
 
-__all__ = [*ibis.__all__, "Step", "recording", "render", "trace", "visualize"]
+__all__ = [*ibis.__all__, "Step", "declare", "recording", "render", "report", "trace", "visualize"]
+
+
+def report(func, *args, **kwargs) -> str:
+    """Trace `func` and return what each step guarantees about its columns, with warnings."""
+    _, steps = trace(func, *args, **kwargs)
+    names = table_names(steps)
+    return _derive.report(steps, _derive.derive(steps, names), names)
 
 
 def __getattr__(name):
@@ -49,6 +58,10 @@ class _SubmoduleAlias(importlib.abc.MetaPathFinder, importlib.abc.Loader):
 
 def _render_at_exit(steps: list[Step]):
     if steps and os.environ.get("IBIS_ANIM", "1") != "0":
+        names = table_names(steps)
+        for line in _derive.report(steps, _derive.derive(steps, names), names).splitlines():
+            if "⚠" in line:
+                print(f"ibis_anim: {line.strip()}")
         print(f"ibis_anim: video at {render(steps, Path(sys.argv[0]).stem or 'ibis_anim')}")
 
 

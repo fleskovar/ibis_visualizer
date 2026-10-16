@@ -50,6 +50,38 @@ When a step changes the type of a column (`cast`, `try_cast`, or a `mutate` with
 
 Columns that the arguments read are yellow. New columns are green. A column that you build outside the table, for example `points = (t.score * 10).cast("int64")`, shows its formula when `mutate` or `select` puts it into a table.
 
+## Facts: what each step guarantees
+
+`ibis_anim` does an abstract interpretation of the pipeline. You state what is known about the source tables. Then each step derives what is known about its result. No data is necessary: the source tables can be `ibis.table(schema, name=...)`.
+
+```python
+ibis.declare(customers, key="customer_id", values={"plan": {"pro", "basic", "trial"}})
+ibis.declare(orders, key="order_id", values={"status": {"paid", "refunded"}, "amount": (0, None)},
+             references={"customer_id": customers.customer_id})
+print(ibis.report(pipeline))  # the facts and warnings of each step, as text
+```
+
+The facts never come from the data. Declare only constraints that hold for any data: keys, foreign keys, an enum type, a `CHECK` constraint, a business rule. Do not declare the values that you see in a sample: that is data profiling, and the facts would then be wrong for other data. The examples declare only keys and foreign keys. Without a declaration, `plan != "trial"` gives `≠ trial` (any value except `trial`), not the values that are left in the sample.
+
+For each column, the facts are:
+
+- the set of possible values: a finite set `{paid}`, a range `≥ 0`, or a complement `≠ trial`
+- the nulls: never, maybe or always
+- uniqueness, and the keys of the table
+- the lineage: `= customers.customer_id` (exactly the same set of values) or `⊆ customers.customer_id` (a subset)
+
+Each step compiles to SQL with its inputs as placeholders. sqlglot qualifies the SQL. Then one sound rule for each SQL form (WHERE, JOIN, GROUP BY, DISTINCT, projection, set operation, window, LIMIT) computes the facts of the result. For example, a filter `amount > 100` gives `amount > 100 · not null`; a left join keeps the set of the left key (`= active.customer_id`) and keeps its keys when the right key is unique; `group_by` makes its keys unique; `fill_null` removes the nulls. A form that the rules do not know gives no fact. Thus a fact is never wrong, but it can be missing.
+
+The analysis also finds possible mistakes:
+
+- a filter that keeps no row, for example `status == "payed"` when `status` is in `{paid, refunded}`
+- a join that can repeat rows, because the right key is not known to be unique (fan-out)
+- join keys with no value in common
+- a division by a column that can be 0
+- a cast that drops the fraction of a value
+
+In the video, each table has a facts row above its type row. `any` means that no value set is known. After each step, a caption lists what the step guarantees, and the changed facts light up. Warnings show in red, and the trace marks the steps that will warn with ⚠ before they run. At exit, the warnings also print to the terminal.
+
 ## Use
 
 ```sh
@@ -61,6 +93,7 @@ python examples/customer_health.py   # a realistic job: 5 tables, chains, a loop
 IBIS_ANIM=0 python my_script.py      # run without the video
 python tests/test_tracer.py          # checks of the tracer
 python tests/test_scope.py           # checks of the tables panel plan
+python tests/test_facts.py           # checks of the facts and warnings
 ```
 
 To render one function only, call `ibis_anim.visualize(func, *args)`. To get the steps without a video, call `ibis_anim.trace(func, *args)`.

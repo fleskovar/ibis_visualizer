@@ -93,7 +93,10 @@ def _wrap(name, orig):
         try:
             out = orig(self, *args, **kwargs)
             if isinstance(out, ir.Table):
-                _steps.append(_make_step(name, self, out, args, kwargs))
+                try:
+                    _steps.append(_make_step(name, self, out, args, kwargs))
+                except Exception:  # ponytail: a step that cannot be recorded yet (e.g. an unfinished join) is skipped, never raised
+                    pass
             return out
         finally:
             _depth -= 1
@@ -162,9 +165,12 @@ def _label(table: ir.Table, frames: list) -> str:
     """The variable name that holds `table` in the innermost user frame."""
     op = table.op()
     for f in reversed(frames):
-        name = next((k for k, v in f.f_locals.items() if isinstance(v, ir.Table) and v.op() == op), None)
-        if name:
-            return name
+        for scope in (f.f_locals, f.f_globals):  # tables defined at module level are globals of the function
+            name = next((k for k, v in scope.items() if isinstance(v, ir.Table) and v.op() == op and not k.startswith("_")), None)
+            if name:
+                return name
+    if isinstance(op, ops.UnboundTable):
+        return op.name
     return next((f"{s.op} result" for s in reversed(_steps) if s.output.op() == op), "table")
 
 

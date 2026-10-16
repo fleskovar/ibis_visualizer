@@ -16,6 +16,9 @@ def load():
         "name": ["Ada", "Linus", "Grace", "Guido"],
         "region": ["EU", "EU", "US", "APAC"],
     })
+    # schema constraints only (keys and foreign keys): the facts never come from the data itself
+    ibis.declare(customers, key="customer_id")
+    ibis.declare(orders, key="order_id", references={"customer_id": customers.customer_id})
     return orders, customers
 
 

@@ -21,11 +21,12 @@ import numpy as np
 from manim import (
     BLACK, BLUE_D, BOLD, DOWN, GOLD_D, GREEN, GREEN_D, GREEN_E, GREY_A, GREY_B, GREY_C, ITALIC, LEFT, MAROON_C, NORMAL,
     ORANGE, ORIGIN, PI, PINK, PURPLE_B, RED, RED_E, RIGHT, TEAL_D, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_E,
-    GREY_D, AnimationGroup, Arrow, Circumscribe, DashedLine, FadeIn, FadeOut, FadeTransform, Indicate, LaggedStart, Line,
+    GREY_D, AnimationGroup, Arrow, Group, Circumscribe, DashedLine, FadeIn, FadeOut, FadeTransform, Indicate, LaggedStart, Line,
     Rectangle, Rotate, RoundedRectangle, Scene, SurroundingRectangle, Text, Transform, TransformFromCopy, VectorizedPoint, VGroup,
     tempconfig,
 )
 
+from ibis_anim._derive import column_text, derive
 from ibis_anim._scope import ScopeFrame, chains, plan, table_names
 from ibis_anim._tracer import Step, _names, recording, trace
 
@@ -35,6 +36,7 @@ PREVIEW_ROWS = 6
 MAX_COLUMNS = 6
 MAX_RESULT_ROWS = 8
 ROW_H = 0.4
+FACTS_H = 0.5
 BAR_BOTTOM = 3.08  # top bar: step, call path and the current statement
 CODE_Y = 3.3
 STRIP_Y, CAPTION_Y = 2.72, 2.32  # the pipeline of the statement, then the caption of the phase
@@ -48,6 +50,8 @@ CARD_FILL = "#1c1c1c"
 CURRENT_LINE = "#3a3a14"
 NEUTRAL = "#3a3a3a"
 TYPE_FILL = "#1f2a38"
+FACTS_FILL, FACTS_NEW, FACTS_TEXT = "#123029", "#1f5c4a", "#a8f0d4"  # the facts row; brighter when the step changed it
+WARNING_FILL = "#3d1515"
 CAPTION = "#8fd3ff"
 PALETTE = [BLUE_D, ORANGE, PURPLE_B, GREEN_D, TEAL_D, MAROON_C, GOLD_D, PINK]
 
@@ -83,6 +87,8 @@ class Sample:
     partial: bool = False  # True when the rows come from a part of the input
     types: dict = field(default_factory=dict)  # column name → ibis type, for example "int64"
     source: object = None  # the op of the input table, to find its card on the panel
+    facts: dict = field(default_factory=dict)  # column name → derived facts, for example 'unique · not null'
+    changed: frozenset = frozenset()  # columns whose facts this step changed
 
 
 def _count(table) -> int:
@@ -244,6 +250,25 @@ def _cell(text: str, width: float, fill, opacity: float, header=False, dark=Fals
     return VGroup(box, label.move_to(box))
 
 
+def _facts_cell(text: str, width: float, changed: bool) -> VGroup:
+    """Two short lines: the flags (unique, not null), then the value set or the lineage."""
+    box = Rectangle(width=width, height=FACTS_H, stroke_width=1, stroke_color=GREY_B).set_fill(FACTS_NEW if changed else FACTS_FILL, 1)
+    parts = [p for p in text.split(" · ") if p]
+    flags = [p for p in parts if p in ("unique", "not null", "always null")]
+    rest = [p for p in parts if p not in flags]
+    lines = [" · ".join(flags)] if flags else []
+    lines += (rest or ["any"])[: 2 - len(lines)]  # no value set: any value of the type
+    label = Text("\n".join(lines), font=SANS, font_size=12, color=GREY_C if lines == ["any"] else FACTS_TEXT,
+                 line_spacing=0.7)  # Consolas lacks ⊆ ∪ ∅
+    label.scale(min(1, (width - 0.08) / label.width, FACTS_H * 0.85 / label.height))
+    return VGroup(box, label.move_to(box))
+
+
+def _core(text: str) -> str:
+    """The facts without the lineage, to tell whether a step changed them."""
+    return " · ".join(p for p in text.split(" · ") if not p.startswith(("=", "⊆")))
+
+
 def _hashable(key: tuple) -> tuple:
     return tuple(tuple(v) if isinstance(v, list) else v for v in key)
 
@@ -272,6 +297,9 @@ class Grid(VGroup):
             if types:  # a type row above the header, as row -2
                 self.cells[-2, name] = _cell(sample.types.get(name, "?"), width, GREEN_E if name in created else TYPE_FILL,
                                              1, dark=name in created, italic=True).move_to([x, ROW_H, 0])
+            if sample.facts:  # a facts row above the type row, as row -3
+                self.cells[-3, name] = _facts_cell(sample.facts.get(name, ""), width, name in sample.changed).move_to(
+                    [x, ROW_H * 1.5 + FACTS_H / 2, 0])
             for r, row in enumerate(sample.rows):
                 cell = _cell(_fmt(row.get(name)), width, fill, 0.18 if marked else 0)
                 self.cells[r, name] = cell.move_to([x, -(r + 1) * ROW_H, 0])
@@ -313,7 +341,7 @@ class Grid(VGroup):
         return self.cells[-2, name]
 
     def column(self, name: str, header=True) -> VGroup:
-        rows = range(-2 if header else 0, len(self.sample.rows))
+        rows = range(-3 if header else 0, len(self.sample.rows))
         return VGroup(*[self.cells[r, name] for r in rows if (r, name) in self.cells])
 
     def commit_rows(self, perm: list[int]):
@@ -330,7 +358,7 @@ class Grid(VGroup):
 class Card(VGroup):
     """One table on the tables shelf: name, shape, and a mini table of its first rows."""
 
-    def __init__(self, name: str, table, rows: int, preview: list[dict]):
+    def __init__(self, name: str, table, rows: int, preview: list[dict], key: str = ""):
         super().__init__()
         self.box = RoundedRectangle(corner_radius=0.07, width=THUMB_W, height=THUMB_H, stroke_width=1.2, stroke_color=GREY_B)
         self.box.set_fill(CARD_FILL, 1)
@@ -355,9 +383,12 @@ class Card(VGroup):
                 mini.add(VGroup(cell, label.move_to(cell)))
         more = len(table.columns) - len(columns)
         self.add(self.box, title, shape, mini)
-        if more:
-            self.add(Text(f"+{more} more columns", font=SANS, font_size=11, color=GREY_B)
-                     .move_to(self.box.get_bottom() + [0, 0.12, 0]))
+        footer = " · ".join(t for t in (f"key: {key}" if key else "", f"+{more} more columns" if more else "") if t)
+        if footer:
+            line = Text(footer, font=SANS, font_size=11, color=FACTS_TEXT if key else GREY_B)
+            if line.width > THUMB_W - 0.16:
+                line.scale_to_fit_width(THUMB_W - 0.16)
+            self.add(line.move_to(self.box.get_bottom() + [0, 0.12, 0]))
 
     def set_state(self, state: str):
         """input: read by the step; output: made by the step; idle: in scope; dead: no later step reads it."""
@@ -399,6 +430,11 @@ class DebuggerScene(Scene):
     def __init__(self, steps: list[Step], title: str, **kwargs):
         self.steps, self.title = steps, title
         self.frames, self.names = plan(steps), table_names(steps)
+        try:
+            self.facts = derive(steps, self.names)
+        except Exception as exc:  # the video works without facts
+            print(f"ibis_anim: no facts ({exc!r})", file=sys.stderr)
+            self.facts = {}
         self.chain_of = {i: run for run in chains(steps, self.names) for i in run}
         self.chrome = self.caption = self.trace_panel = self.result = None
         self.cards, self.rows, self.previews = {}, {}, {}
@@ -424,6 +460,7 @@ class DebuggerScene(Scene):
             self._activate(frame)
             self.result = None
             self._animate(step)
+            self._guarantees(step)
             self.wait(1.5)
             self._finish(step, frame)
         self.wait(2)
@@ -445,9 +482,10 @@ class DebuggerScene(Scene):
         """(kind, step, text, depth): one line per function call, and one line per step under it."""
         lines, previous = [], None
         for i, step in enumerate(self.steps):
-            calls = tuple(f.name for f in step.stack if f.name != "<module>") or ("?",)
+            calls = tuple(f"{f.name}()" for f in step.stack if f.name != "<module>")
+            calls = calls or (os.path.basename(step.stack[-1].filename) if step.stack else "?",)  # module-level code: the script
             if calls != previous:
-                lines.append(("call", i, f"{calls[-1]}()", len(calls) - 1))
+                lines.append(("call", i, calls[-1], len(calls) - 1))
                 previous = calls
             lines.append(("step", i, f"{i + 1:>2} {step.op}", len(calls) - 1))
         return lines
@@ -468,15 +506,18 @@ class DebuggerScene(Scene):
             done, now = s < i, s == i
             icon = Text("✔" if done else "▸" if now else "·", font=SANS, font_size=13,
                         color=GREEN if done else YELLOW if now else GREY_D)
+            warns = bool(self.facts.get(self.steps[s].output.op()) and self.facts[self.steps[s].output.op()].warnings)
             line = Text(text, font=MONO, font_size=13, color=GREY_B if done else YELLOW_A if now else GREY_C)
             icon.move_to([indent + 0.3, y, 0])
             line.move_to([indent + 0.45 + line.width / 2, y, 0])
             if line.get_right()[0] > DIVIDER_X - 0.1:
                 line.scale_to_fit_width(DIVIDER_X - 0.1 - line.get_left()[0], about_edge=LEFT)
             row = VGroup(icon, line)
+            if warns:  # known before the step runs: the analysis covers the whole trace
+                row.add(Text("⚠", font=SANS, font_size=13, color=RED).next_to(line, RIGHT, buff=0.08))
             if now:
                 band = Rectangle(width=DIVIDER_X - SHELF_LEFT + 0.1, height=0.3, stroke_width=0).set_fill(CURRENT_LINE, 1)
-                row = VGroup(band.move_to([(SHELF_LEFT + DIVIDER_X) / 2, y, 0]), icon, line)
+                row = VGroup(band.move_to([(SHELF_LEFT + DIVIDER_X) / 2, y, 0]), *row)
             panel.add(row)
         if start > 0:
             panel.add(Text("⋮", font=SANS, font_size=13, color=GREY_C).move_to([SHELF_LEFT + 2.6, BAR_BOTTOM - 0.18, 0]))
@@ -535,7 +576,9 @@ class DebuggerScene(Scene):
             table = key.to_expr()
             self.rows[key] = _count(table)
             self.previews[key] = table.head(3).to_pyarrow().to_pylist()
-        return Card(self.names.get(key, "table"), key.to_expr(), self.rows[key], self.previews[key])
+        facts = self.facts.get(key)
+        first_key = ", ".join(sorted(min(facts.keys, key=len))) if facts and facts.keys else ""
+        return Card(self.names.get(key, "table"), key.to_expr(), self.rows[key], self.previews[key], first_key)
 
     def _activate(self, frame: ScopeFrame):
         """New tables join the shelf; the step's inputs light up and grow; the others dim."""
@@ -550,6 +593,51 @@ class DebuggerScene(Scene):
         self.play(*anims, run_time=0.7)
         self.play(*[Circumscribe(self.cards[k], color=YELLOW, buff=0.04) for k in frame.inputs], run_time=0.8)
 
+    def _facts_texts(self, op, inputs=()) -> dict:
+        facts = self.facts.get(op)
+        return {c: column_text(facts, c, self.names.get(op, ""), inputs) for c in facts.columns} if facts else {}
+
+    def _with_facts(self, step: Step, ins: list[Sample], out: Sample) -> tuple[list[Sample], Sample]:
+        inputs = [self.names.get(t.op(), "") for t in step.inputs]
+        for sample, table in zip(ins, step.inputs):
+            sample.facts = self._facts_texts(table.op())
+        out.facts = self._facts_texts(step.output.op(), inputs)
+        before = ins[0].facts if ins else {}
+        out.changed = frozenset(c for c, text in out.facts.items() if text and _core(text) != _core(before.get(c, "")))
+        return ins, out
+
+    def _guarantees(self, step: Step):
+        """What the step guarantees about its result, then its warnings."""
+        facts = self.facts.get(step.output.op())
+        if facts is None:
+            return
+        inputs = [self.names.get(t.op(), "") for t in step.inputs]
+        after, before = self._facts_texts(step.output.op(), inputs), self._facts_texts(step.inputs[0].op())
+        changed = [c for c in step.output.columns if after.get(c) and _core(after[c]) != _core(before.get(c, ""))]
+        items = [f"{c}: {_core(after[c]) or after[c]}" for c in changed[:3]]
+        if facts.rows and facts.rows != "?":
+            items.append(f"rows {facts.rows}")
+        if items:
+            self._say("guaranteed: " + "; ".join(items), wait=0.3)
+            grid = self.result if isinstance(self.result, Grid) else None
+            cells = [grid.cells[-3, c] for c in changed if grid is not None and (-3, c) in grid.cells]
+            if cells:
+                self.play(*[Circumscribe(c, color=FACTS_TEXT, buff=0.03) for c in cells], run_time=1)
+            self.wait(1)
+        boxes = VGroup()
+        for warning in facts.warnings[:2]:
+            text = Text("⚠ " + textwrap.fill(warning, 85), font=SANS, font_size=16, color=WHITE, t2c={"⚠": RED})
+            box = RoundedRectangle(corner_radius=0.08, width=text.width + 0.3, height=text.height + 0.2, stroke_color=RED,
+                                   stroke_width=2).set_fill(WARNING_FILL, 0.95)
+            boxes.add(VGroup(box, text.move_to(box)))
+        if len(boxes):
+            boxes.arrange(UP, buff=0.12, aligned_edge=LEFT)
+            if boxes.width > STAGE_W:
+                boxes.scale_to_fit_width(STAGE_W)
+            boxes.move_to([DIVIDER_X + 0.25 + boxes.width / 2, ZONE_BOTTOM + 0.1 + boxes.height / 2, 0])
+            self.play(LaggedStart(*[FadeIn(b, shift=UP * 0.2) for b in boxes], lag_ratio=0.3), run_time=0.8)
+            self.wait(2.5)
+
     def _enter(self, *grids):
         """Each input table grows out of its card on the shelf."""
         anims = []
@@ -561,7 +649,7 @@ class DebuggerScene(Scene):
     def _finish(self, step: Step, frame: ScopeFrame):
         """The result shrinks into its card; replaced and expired cards leave; the shelf closes up."""
         persistent = {id(m) for m in self._persistent()}
-        result = self.result or VGroup(*[m for m in self.mobjects if id(m) not in persistent])
+        result = self.result or Group(*[m for m in self.mobjects if id(m) not in persistent])  # the stage can hold plain Groups
         family = {id(m) for m in result.get_family()}
         stage = [m for m in self.mobjects if id(m) not in persistent and not family & {id(x) for x in m.get_family()}]
         states = ["output" if k == frame.output else "dead" if k in frame.dead_after else "idle" for k in frame.after]
@@ -698,7 +786,7 @@ class DebuggerScene(Scene):
             self._flow
         )
         try:
-            handler(step, *_run_on_samples(step))
+            handler(step, *self._with_facts(step, *_run_on_samples(step)))
         except Exception as exc:  # ponytail: an op shape that a choreography does not handle gets the plain flow
             print(f"ibis_anim: plain animation for step {step.op} ({exc!r})", file=sys.stderr)
             self._settle()
@@ -748,6 +836,7 @@ class DebuggerScene(Scene):
         self._subset_marks(grid, keep, marks=test is not None)
         title = Text(f"result · {out.total} rows" + (" in full" if out.partial else ""), font=SANS, font_size=18, color=GREY_A)
         self.play(Transform(grid.title, title.scale(grid.title.height / title.height).move_to(grid.title, aligned_edge=LEFT)))
+        self._refresh_facts(grid, out)
         self.result = grid
 
     def _filter(self, step: Step, ins: list[Sample], out: Sample):
@@ -809,7 +898,7 @@ class DebuggerScene(Scene):
             self._say(f"union: the rows of {step.labels[1]} go under the rows of {step.labels[0]}")
             n = len(a.rows)
             self.play(*[gb.row(j).animate(path_arc=0.6).move_to(ga.slot(n + j, (len(shown) - 1) / 2)) for j in range(len(b.rows))],
-                      FadeOut(gb.title), *[FadeOut(gb.header(c)) for c in shown], run_time=2.5)
+                      FadeOut(gb.title), *[FadeOut(cell) for (r, _c), cell in gb.cells.items() if r < 0], run_time=2.5)  # header, types, facts
             rows = [ga.row(i) for i in range(n)] + [gb.row(j) for j in range(len(b.rows))]
             combined = a.rows + b.rows
             keep = [i in set(_match(out.rows, combined, [(c, c) for c in a.columns])) for i in range(len(combined))]
@@ -820,6 +909,7 @@ class DebuggerScene(Scene):
                 self._drop(gb, [rows[i] for i in gone])
                 kept = [i for i, k in enumerate(keep) if k]
                 self.play(*[rows[i].animate.shift(UP * (ga.slot(j, 0)[1] - ga.slot(i, 0)[1])) for j, i in enumerate(kept) if j != i])
+            self._refresh_facts(ga, out)
             return
         self._side_by_side([ga, gb], gap=1.5)
         self._enter(ga, gb)
@@ -827,6 +917,19 @@ class DebuggerScene(Scene):
         self._say(f"{verb}: keep each row of {step.labels[0]} that {word} {step.labels[1]} (same colour = same row)")
         self._subset_marks(ga, [hit if verb == "intersect" else not hit for hit in in_b])
         self.play(FadeOut(gb))
+        self._refresh_facts(ga, out)
+
+    def _refresh_facts(self, grid: Grid, out: Sample):
+        """An in-place step keeps drawing its input table: at the end, its facts row takes the facts of the result."""
+        anims = []
+        for name in grid.shown:
+            old = grid.cells.get((-3, name))
+            if old is not None:
+                unscaled_width = old[0].width * FACTS_H / old[0].height  # the grid can be scaled: keep the cell's proportions
+                new = _facts_cell(out.facts.get(name, ""), unscaled_width, name in out.changed)
+                anims.append(Transform(old, new.match_width(old[0]).move_to(old[0])))
+        if anims:
+            self.play(*anims, run_time=0.8)
 
     def _subset_marks(self, grid: Grid, keep: list[bool], marks=True):
         """Optional ✔/✘ marks; the rows to remove turn red and leave; the other rows slide up."""
@@ -900,6 +1003,7 @@ class DebuggerScene(Scene):
         if not self._reorder(grid, perm):
             self._say("the rows are already in this order", wait=0.3)
         self.play(LaggedStart(*[Indicate(grid.cell(r, names[0]), color=YELLOW) for r in range(len(perm))], lag_ratio=0.25), run_time=2)
+        self._refresh_facts(grid, out)
         self.result = grid
 
     def _columns(self, step: Step, ins: list[Sample], out: Sample):

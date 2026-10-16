@@ -40,6 +40,12 @@ def load():
         "customer_id": [2, 2, 4, 5, 1],
         "priority": ["high", "low", "high", "low", "low"],
     })
+    # schema constraints only (keys and foreign keys): the facts never come from the data itself
+    ibis.declare(customers, key="customer_id")
+    ibis.declare(orders, key="order_id", references={"customer_id": customers.customer_id})
+    ibis.declare(products, key="sku")
+    ibis.declare(items, references={"order_id": orders.order_id, "sku": products.sku})
+    ibis.declare(tickets, key="ticket_id", references={"customer_id": customers.customer_id})
     return customers, orders, items, products, tickets
 
 
