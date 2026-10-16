@@ -24,6 +24,7 @@ The script runs as before. At exit, the video goes to `media/videos/480p15/<scri
    - Stage (middle): the animation of the step. Each table has a row with the types of its columns above the header.
    - Tables in scope (bottom): each table is a mini table with its name (the variable that holds it), shape and first rows. The tables that the step reads light up yellow and grow. The result shrinks into a green card.
    - When the result rebinds a variable (`orders = orders.filter(...)`), or a chain goes on, the result card takes the place of the input card.
+   - In a chain (`t.join(...).mutate(...).group_by(...).aggregate(...)`), the result stays on the stage and moves into the next call. Only the last result of the chain goes to the shelf. Each call of the chain runs on the rows that the call before it showed.
    - A table that no later step reads gets small and dim. Two steps after its last use, it leaves the shelf.
 5. At exit, each step runs again on DuckDB, on the first 6 rows of each input only. Thus each value in the animation comes from the rows on the screen.
 6. Each kind of operation has its own animation, in phases. A caption under the code explains each phase.
@@ -66,9 +67,10 @@ The facts never come from the data. Declare only constraints that hold for any d
 For each column, the facts are:
 
 - the set of possible values: a finite set `{paid}`, a range `≥ 0`, or a complement `≠ trial`
-- the nulls: never, maybe or always
+- the nulls: never, maybe or always. `not null` says that no row has a null in the column. It does not say that there is a row: an empty column has no nulls too. For example, after `filter(_.revenue > 20)`, `revenue` is `not null`, because a null does not pass `> 20`.
 - uniqueness, and the keys of the table
-- the lineage: `= customers.customer_id` (exactly the same set of values) or `⊆ customers.customer_id` (a subset)
+- for the table: the row count compared with the input (`= input`, `≤ input`, `≥ input`), and whether the step can return no row even when its input has rows (`can be empty`). A filter, an inner join, `intersect`, `difference`, `sample`, `unnest` and `pivot_longer` can. A left join, `group_by`, `distinct`, `mutate` and `order_by` cannot. An aggregate without `group_by` always gives one row.
+- the lineage: `= customers.customer_id` (exactly the same set of values) or `⊆ customers.customer_id` (a subset). The lineage names the most upstream table that still holds: a source table, or the earliest named variable. The unnamed results of a chain are not used. Thus the label changes only when the relation changes, for example from `=` to `⊆` after an inner join.
 
 Each step compiles to SQL with its inputs as placeholders. sqlglot qualifies the SQL. Then one sound rule for each SQL form (WHERE, JOIN, GROUP BY, DISTINCT, projection, set operation, window, LIMIT) computes the facts of the result. For example, a filter `amount > 100` gives `amount > 100 · not null`; a left join keeps the set of the left key (`= active.customer_id`) and keeps its keys when the right key is unique; `group_by` makes its keys unique; `fill_null` removes the nulls. A form that the rules do not know gives no fact. Thus a fact is never wrong, but it can be missing.
 

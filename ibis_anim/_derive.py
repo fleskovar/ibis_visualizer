@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime
 import math
+import re
 from dataclasses import replace
 
 import ibis
@@ -30,18 +31,24 @@ FLIP = {">": "<", ">=": "<=", "<": ">", "<=": ">=", "=": "=", "!=": "!="}
 
 def derive(steps, names: dict) -> dict:
     """The facts of each table of the trace, keyed by its op."""
-    facts = {}
-    for step in steps:
+    facts, ranks = {}, {}  # one ranks dict for the whole trace: where each origin began
+    for i, step in enumerate(steps):
         for k, table in enumerate(step.inputs):
             if table.op() not in facts:
-                facts[table.op()] = source_facts(table, names.get(table.op(), f"in{k}"), names)
+                name = names.get(table.op(), f"in{k}")
+                facts[table.op()] = source_facts(table, name, names)
+                facts[table.op()].ranks = ranks
+                ranks.update({f"{name}.{c}": -1 for c in table.columns if f"{name}.{c}" not in ranks})
         frontier = _frontier(step.output.op(), facts)
         ins = []
         for op in frontier:
-            name = names.get(op, "table")
-            seen = {c: replace(f, equal_to=f.equal_to | {f"{name}.{c}"}) for c, f in facts[op].columns.items()}
-            ins.append(TableFacts(seen, facts[op].keys))
+            name, columns = names.get(op, "table"), facts[op].columns
+            if name.isidentifier():  # a named table anchors the lineage; an unnamed result of a chain does not
+                ranks.update({f"{name}.{c}": i for c in columns if f"{name}.{c}" not in ranks})
+                columns = {c: replace(f, equal_to=f.equal_to | {f"{name}.{c}"}) for c, f in columns.items()}
+            ins.append(TableFacts(columns, facts[op].keys))
         facts[step.output.op()] = _step(step, frontier, ins, [names.get(op, "table") for op in frontier])
+        facts[step.output.op()].ranks = ranks
     return facts
 
 
@@ -103,8 +110,9 @@ def _relabel(text: str, labels: dict) -> str:
 def _query(node, env: dict) -> TableFacts:
     if isinstance(node, exp.Subquery):
         return _query(node.this, env)
-    if node.args.get("with"):
-        env = env | {cte.alias: _query(cte.this, env) for cte in node.args["with"].expressions}
+    ctes = node.args.get("with_") or node.args.get("with")  # sqlglot 30 names it with_
+    if ctes:
+        env = env | {cte.alias: _query(cte.this, env) for cte in ctes.expressions}
     if isinstance(node, (exp.Union, exp.Intersect, exp.Except)):
         return _set_operation(node, env)
     if isinstance(node, exp.Select):
@@ -126,14 +134,17 @@ def _select(sel: exp.Select, env: dict) -> TableFacts:
     alias, first, first_name = _source(source, env)
     cols = {(alias, c): f for c, f in first.columns.items()}
     keys = [frozenset((alias, c) for c in k) for k in first.keys]
-    rows, warnings = "= input", list(first.warnings) if isinstance(source, exp.Subquery) else []
+    from_input = re.fullmatch(r"in\d+", first_name) is not None  # else a CTE or a subquery of this step
+    rows, warnings = ("= input", []) if from_input else (first.rows or "?", list(first.warnings))
+    can_empty = False if from_input else first.can_empty  # an empty result from a non-empty input
     if source.args.get("sample"):
-        cols, rows = {k: f.narrowed() for k, f in cols.items()}, "≤ input"
+        cols, rows, can_empty = {k: f.narrowed() for k, f in cols.items()}, "≤ input", True
     for join in sel.args.get("joins") or []:
-        cols, keys, rows = _join(join, cols, keys, rows, first_name, env, warnings)
-    if sel.args.get("where") is not None:
+        cols, keys, rows, join_can_empty = _join(join, cols, keys, rows, first_name, env, warnings)
+        can_empty = can_empty or join_can_empty
+    if sel.args.get("where") is not None:  # no row has to pass the condition
         cols = _where(sel.args["where"].this, cols, warnings)
-        rows = "≤ input"
+        rows, can_empty = "≤ input", True
     group = sel.args.get("group")
     aggregated = bool(group) or any(_has_aggregate(p) for p in sel.expressions)
     out = {p.alias_or_name: _expr(p.unalias(), cols, bool(group), warnings) for p in sel.expressions}
@@ -143,9 +154,12 @@ def _select(sel: exp.Select, env: dict) -> TableFacts:
         keys = [frozenset(by)] if by and None not in by and len(by) == len(group.expressions) else []
         rows = "≤ input"
     elif aggregated:  # an aggregate without GROUP BY gives one row: each column identifies it
-        keys, rows = [frozenset({n}) for n in out], "1"
+        keys, rows, can_empty = [frozenset({n}) for n in out], "1", False
     else:
         keys = [frozenset(bare[c] for c in k) for k in keys if all(c in bare for c in k)]
+    if any(p.find(exp.Explode, exp.Unnest) for p in sel.expressions):  # UNNEST in the projection makes rows
+        keys, rows, can_empty = [], "≠ input", True  # an empty array gives no row
+        out = {c: f.narrowed() for c, f in out.items()}
     if sel.args.get("distinct"):
         keys.append(frozenset(out))
         rows = "≤ input"
@@ -153,10 +167,11 @@ def _select(sel: exp.Select, env: dict) -> TableFacts:
     if limit is not None:
         n = _literal(limit.expression)
         rows = f"≤ {n}" if isinstance(n, int) else "≤ input"
+        can_empty = can_empty or n == 0
         if n == 1:
             keys += [frozenset({c}) for c in out]
         out = {c: f.narrowed() for c, f in out.items()}
-    return TableFacts(out, keys, rows, warnings)
+    return TableFacts(out, keys, rows, warnings, can_empty=can_empty)
 
 
 def _join(join: exp.Join, cols, keys, rows, left_name, env, warnings):
@@ -165,7 +180,7 @@ def _join(join: exp.Join, cols, keys, rows, left_name, env, warnings):
     if isinstance(target, exp.Unnest):  # each array element becomes a row: keys are lost
         alias = target.args.get("alias")
         elements = {(alias.name, c.name): Column() for c in alias.columns} if alias else {}
-        return {k: f.narrowed() for k, f in cols.items()} | elements, [], "≠ input"
+        return {k: f.narrowed() for k, f in cols.items()} | elements, [], "≠ input", True
     alias, right, right_name = _source(target, env)
     if isinstance(target, exp.Subquery):
         warnings.extend(right.warnings)
@@ -209,7 +224,9 @@ def _join(join: exp.Join, cols, keys, rows, left_name, env, warnings):
         warnings.append(f"rows of {left_name} can repeat: {joined} is not known to be unique (fan-out)")
     if kind == "CROSS" or not pairs:
         rows = "?"
-    return cols | rcols, list(dict.fromkeys(new_keys)), rows
+    # an outer join keeps the rows of its outer side; an inner, semi or anti join can match no row
+    can_empty = side not in ("LEFT", "RIGHT", "FULL") and kind != "CROSS"
+    return cols | rcols, list(dict.fromkeys(new_keys)), rows, can_empty
 
 
 def _where(condition, cols, warnings):
@@ -250,7 +267,8 @@ def _set_operation(node, env) -> TableFacts:
     if isinstance(node, exp.Except):
         keys += left.keys
     rows = "= sum of inputs" if isinstance(node, exp.Union) and not distinct else "≤ input"
-    return TableFacts(out, keys, rows, left.warnings + right.warnings)
+    can_empty = (left.can_empty and right.can_empty) if isinstance(node, exp.Union) else True  # intersect, except
+    return TableFacts(out, keys, rows, left.warnings + right.warnings, can_empty=can_empty)
 
 
 # -- conditions --------------------------------------------------------------------------------------
@@ -344,7 +362,13 @@ def _expr(e, cols: dict, grouped: bool, warnings: list) -> Column:
     e = e.unnest()
     sub = lambda x: _expr(x, cols, grouped, warnings)  # noqa: E731
     if isinstance(e, exp.Column):
+        if e.text("db"):  # a field of a struct column: "t1"."__pivoted__"."month"
+            return dict(cols.get((e.text("db"), e.table), Column()).fields).get(e.name, Column())
         return cols.get((e.table, e.name), Column())
+    if isinstance(e, exp.Dot):  # the optimizer writes a struct field as struct_column.field
+        return dict(sub(e.this).fields).get(e.expression.name, Column())
+    if isinstance(e, (exp.Explode, exp.Unnest)):
+        return _unnested(e, sub)
     if isinstance(e, exp.Null):
         return Column(P.empty(), ALWAYS)
     if (v := _literal(e)) is not NO_VALUE:
@@ -395,6 +419,29 @@ def _expr(e, cols: dict, grouped: bool, warnings: list) -> Column:
     return Column()
 
 
+def _unnested(e, sub) -> Column:
+    """The element of UNNEST(array). A literal array of structs (as pivot_longer makes) gives facts per field."""
+    array = e.this.this if isinstance(e.this, exp.Cast) else e.this
+    if not isinstance(array, exp.Array) or not all(isinstance(x, exp.Struct) for x in array.expressions):
+        return Column()
+    fields: dict[str, list[Column]] = {}
+    for struct in array.expressions:
+        for prop in struct.expressions:
+            if isinstance(prop, exp.PropertyEQ):
+                fields.setdefault(prop.this.name, []).append(sub(prop.expression))
+    return Column(fields=tuple((name, _union(parts)) for name, parts in fields.items()))
+
+
+def _union(parts: list[Column]) -> Column:
+    """A column whose value comes from any of `parts`."""
+    values = P.empty()
+    for part in parts:
+        values = safe(lambda: values | part.values)
+    origins = [p.subset_of | p.equal_to for p in parts]
+    return Column(values, NEVER if all(p.nulls == NEVER for p in parts) else MAYBE,
+                  subset_of=frozenset.intersection(*origins) if origins else frozenset())
+
+
 def _cast(e, inner: Column, warnings: list) -> Column:
     to = e.to
     source = e.this.type
@@ -442,10 +489,11 @@ def _window(e: exp.Window, sub) -> Column:
 # -- report ------------------------------------------------------------------------------------------
 
 
-def column_text(facts: TableFacts, name: str, table_name: str = "", inputs=()) -> str:
+def column_text(facts: TableFacts, name: str, table_name: str = "") -> str:
     """Short facts of one column: 'unique · {paid} · not null · ⊆ customers.customer_id'.
 
-    Origins in the step's own `inputs` come first: they say what the step kept.
+    The lineage names the most upstream table that still holds (a source table first, then the
+    earliest named table). So it stays the same from step to step until the relation really changes.
     """
     col = facts.column(name)
     parts = ["unique"] if facts.unique(name) else []
@@ -456,7 +504,7 @@ def column_text(facts: TableFacts, name: str, table_name: str = "", inputs=()) -
     elif col.nulls == ALWAYS:
         parts.append("always null")
     own = {f"{table_name}.{name}"}
-    first = lambda origins: sorted(origins, key=lambda o: (o.split(".")[0] not in inputs, o))[:1]  # noqa: E731
+    first = lambda origins: sorted(origins, key=lambda o: (facts.ranks.get(o, -1), o))[:1]  # noqa: E731
     parts += [f"= {o}" for o in first(col.equal_to - own)]
     parts += [f"⊆ {o}" for o in first(col.subset_of - own - col.equal_to)]
     return " · ".join(parts)
@@ -468,12 +516,13 @@ def report(steps, facts: dict, names: dict) -> str:
         out = facts[step.output.op()]
         name = names.get(step.output.op(), "result")
         inputs = [names.get(t.op(), "table") for t in step.inputs]
-        lines.append(f"{i:>2}. {step.function}() › {step.op}({', '.join(inputs)}) → {name}   rows {out.rows or '?'}")
+        empty = " · can be empty" if out.can_empty else ""
+        lines.append(f"{i:>2}. {step.function}() › {step.op}({', '.join(inputs)}) → {name}   rows {out.rows or '?'}{empty}")
         if out.keys:
             keys = ["all columns" if k == set(out.columns) else "(" + ", ".join(sorted(k)) + ")" for k in out.keys[:3]]
             lines.append("      keys: " + "; ".join(keys))
         for c in step.output.columns:
-            text = column_text(out, c, name, inputs)
+            text = column_text(out, c, name)
             if text:
                 lines.append(f"      {c}: {text}")
         lines += [f"      ⚠ {w}" for w in out.warnings]

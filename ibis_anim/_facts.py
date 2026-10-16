@@ -22,6 +22,7 @@ class Column:
     nulls: str = MAYBE
     equal_to: frozenset = frozenset()  # source columns with exactly the same set of values, as "table.column"
     subset_of: frozenset = frozenset()  # source columns whose set of values contains this one
+    fields: tuple = ()  # for a struct column: (field name, Column) pairs
 
     def narrowed(self) -> Column:
         """The column after rows were removed: equal sets become subsets."""
@@ -34,6 +35,8 @@ class TableFacts:
     keys: list[frozenset] = field(default_factory=list)  # column sets that identify a row
     rows: str = ""  # row count compared with the input, for example "≤ input"
     warnings: list[str] = field(default_factory=list)
+    ranks: dict = field(default_factory=dict)  # origin "table.column" → step where it began; source tables are -1
+    can_empty: bool = False  # the step can return no row even when its inputs have rows (a filter, an inner join)
 
     def column(self, name: str) -> Column:
         return self.columns.get(name, Column())

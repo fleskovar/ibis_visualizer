@@ -22,7 +22,7 @@ from manim import (
     BLACK, BLUE_D, BOLD, DOWN, GOLD_D, GREEN, GREEN_D, GREEN_E, GREY_A, GREY_B, GREY_C, ITALIC, LEFT, MAROON_C, NORMAL,
     ORANGE, ORIGIN, PI, PINK, PURPLE_B, RED, RED_E, RIGHT, TEAL_D, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_E,
     GREY_D, AnimationGroup, Arrow, Group, Circumscribe, DashedLine, FadeIn, FadeOut, FadeTransform, Indicate, LaggedStart, Line,
-    Rectangle, Rotate, RoundedRectangle, Scene, SurroundingRectangle, Text, Transform, TransformFromCopy, VectorizedPoint, VGroup,
+    Rectangle, ReplacementTransform, Rotate, RoundedRectangle, Scene, SurroundingRectangle, Text, Transform, TransformFromCopy, VectorizedPoint, VGroup,
     tempconfig,
 )
 
@@ -99,18 +99,25 @@ def _types(table) -> dict[str, str]:
     return {name: str(dtype).lstrip("!") for name, dtype in table.schema().items()}
 
 
-def _run_on_samples(step: Step) -> tuple[list[Sample], Sample]:
-    """The first rows of each input, and the output of the step on these rows only."""
-    arrows = [t.head(PREVIEW_ROWS).to_pyarrow() for t in step.inputs]
+def _run_on_samples(step: Step, given: dict | None = None):
+    """The first rows of each input, the output of the step on these rows only, and the output rows as arrow.
+
+    `given` maps an input op to (arrow rows, partial): in a chain, a step reads the rows that the step
+    before it showed, not a new sample of the full table.
+    """
+    given = given or {}
+    arrows = [given[t.op()][0] if t.op() in given else t.head(PREVIEW_ROWS).to_pyarrow() for t in step.inputs]
     mapping = {}
     for t, a in zip(step.inputs, arrows):
         mem = ibis.memtable(a)
         mapping[t.op()] = (mem if mem.schema() == t.schema() else mem.cast(t.schema())).op()
-    ins = [Sample(label, t.columns, a.to_pylist(), _count(t), types=_types(t), source=t.op())
+    ins = [Sample(label, t.columns, a.to_pylist(), _count(t), partial=t.op() in given and given[t.op()][1],
+                  types=_types(t), source=t.op())
            for t, label, a in zip(step.inputs, step.labels, arrows)]
-    rows = step.output.op().replace(mapping).to_expr().to_pyarrow().to_pylist()
-    partial = any(len(s.rows) < s.total for s in ins)
-    return ins, Sample("result", step.output.columns, rows, _count(step.output), partial, _types(step.output))
+    result = step.output.op().replace(mapping).to_expr().to_pyarrow()
+    partial = any(s.partial or len(s.rows) < s.total for s in ins)
+    out = Sample("result", step.output.columns, result.to_pylist(), _count(step.output), partial, _types(step.output))
+    return ins, out, result.slice(0, MAX_RESULT_ROWS)
 
 
 def _plain_samples(step: Step) -> tuple[list[Sample], Sample]:
@@ -262,11 +269,6 @@ def _facts_cell(text: str, width: float, changed: bool) -> VGroup:
                  line_spacing=0.7)  # Consolas lacks ⊆ ∪ ∅
     label.scale(min(1, (width - 0.08) / label.width, FACTS_H * 0.85 / label.height))
     return VGroup(box, label.move_to(box))
-
-
-def _core(text: str) -> str:
-    """The facts without the lineage, to tell whether a step changed them."""
-    return " · ".join(p for p in text.split(" · ") if not p.startswith(("=", "⊆")))
 
 
 def _hashable(key: tuple) -> tuple:
@@ -436,7 +438,8 @@ class DebuggerScene(Scene):
             print(f"ibis_anim: no facts ({exc!r})", file=sys.stderr)
             self.facts = {}
         self.chain_of = {i: run for run in chains(steps, self.names) for i in run}
-        self.chrome = self.caption = self.trace_panel = self.result = None
+        self.chrome = self.caption = self.trace_panel = self.result = self.carry = self.carry_op = None
+        self.chain_rows, self.next_rows = {}, {}  # the rows that a chain hands from one step to the next
         self.cards, self.rows, self.previews = {}, {}, {}
         self.zone_top = ZONE_TOP
         self.trace_lines = self._trace_lines()
@@ -462,7 +465,7 @@ class DebuggerScene(Scene):
             self._animate(step)
             self._guarantees(step)
             self.wait(1.5)
-            self._finish(step, frame)
+            self._finish(i, step, frame)
         self.wait(2)
 
     def _overview(self):
@@ -593,17 +596,17 @@ class DebuggerScene(Scene):
         self.play(*anims, run_time=0.7)
         self.play(*[Circumscribe(self.cards[k], color=YELLOW, buff=0.04) for k in frame.inputs], run_time=0.8)
 
-    def _facts_texts(self, op, inputs=()) -> dict:
+    def _facts_texts(self, op) -> dict:
         facts = self.facts.get(op)
-        return {c: column_text(facts, c, self.names.get(op, ""), inputs) for c in facts.columns} if facts else {}
+        return {c: column_text(facts, c, self.names.get(op, "")) for c in facts.columns} if facts else {}
 
     def _with_facts(self, step: Step, ins: list[Sample], out: Sample) -> tuple[list[Sample], Sample]:
         inputs = [self.names.get(t.op(), "") for t in step.inputs]
         for sample, table in zip(ins, step.inputs):
             sample.facts = self._facts_texts(table.op())
-        out.facts = self._facts_texts(step.output.op(), inputs)
+        out.facts = self._facts_texts(step.output.op())
         before = ins[0].facts if ins else {}
-        out.changed = frozenset(c for c, text in out.facts.items() if text and _core(text) != _core(before.get(c, "")))
+        out.changed = frozenset(c for c, text in out.facts.items() if text and text != before.get(c, ""))
         return ins, out
 
     def _guarantees(self, step: Step):
@@ -611,18 +614,24 @@ class DebuggerScene(Scene):
         facts = self.facts.get(step.output.op())
         if facts is None:
             return
-        inputs = [self.names.get(t.op(), "") for t in step.inputs]
-        after, before = self._facts_texts(step.output.op(), inputs), self._facts_texts(step.inputs[0].op())
-        changed = [c for c in step.output.columns if after.get(c) and _core(after[c]) != _core(before.get(c, ""))]
-        items = [f"{c}: {_core(after[c]) or after[c]}" for c in changed[:3]]
+        after, before = self._facts_texts(step.output.op()), self._facts_texts(step.inputs[0].op())
+        changed = [c for c in step.output.columns if after.get(c) and after[c] != before.get(c, "")]  # lineage included
+        items = [f"{c}: {after[c]}" for c in changed[:3]]
         if facts.rows and facts.rows != "?":
             items.append(f"rows {facts.rows}")
+        if facts.can_empty:  # "not null" says that no row has a null, not that there is a row
+            items.append("the result can be empty")
         if items:
             self._say("guaranteed: " + "; ".join(items), wait=0.3)
             grid = self.result if isinstance(self.result, Grid) else None
             cells = [grid.cells[-3, c] for c in changed if grid is not None and (-3, c) in grid.cells]
-            if cells:
-                self.play(*[Circumscribe(c, color=FACTS_TEXT, buff=0.03) for c in cells], run_time=1)
+            anims = [Circumscribe(c, color=FACTS_TEXT, buff=0.03) for c in cells]
+            if facts.can_empty and grid is not None:
+                tag = Text("can be empty", font=SANS, font_size=15, color=ORANGE)
+                tag.scale(grid.title.height / Text("result", font=SANS, font_size=18).height)
+                anims.append(FadeIn(tag.next_to(grid.title, RIGHT, buff=0.25), shift=LEFT * 0.2))
+            if anims:
+                self.play(*anims, run_time=1)
             self.wait(1)
         boxes = VGroup()
         for warning in facts.warnings[:2]:
@@ -639,15 +648,56 @@ class DebuggerScene(Scene):
             self.wait(2.5)
 
     def _enter(self, *grids):
-        """Each input table grows out of its card on the shelf."""
+        """Each input table grows out of its card on the shelf. In a chain, the table already on the stage
+        moves into place instead."""
+        carried = [g for g in grids if self.carry is not None and g.sample.source == self.carry_op][:1]
+        if carried:
+            self._morph(self.carry, carried[0])
+            self.carry = None
         anims = []
         for g in grids:
-            card = self.cards.get(g.sample.source)
-            anims.append(FadeIn(g, target_position=card.get_center(), scale=0.2) if card else FadeIn(g))
-        self.play(*anims, run_time=0.9)
+            if g not in carried:
+                card = self.cards.get(g.sample.source)
+                anims.append(FadeIn(g, target_position=card.get_center(), scale=0.2) if card else FadeIn(g))
+        if anims:
+            self.play(*anims, run_time=0.9)
 
-    def _finish(self, step: Step, frame: ScopeFrame):
-        """The result shrinks into its card; replaced and expired cards leave; the shelf closes up."""
+    def _morph(self, old: Grid, new: Grid):
+        """Hand a table from one layout to the next: each column and each row moves to its new place.
+
+        A cell moves to the cell of the same column and the same row (rows are matched by their values).
+        Cells of columns or rows that the new layout does not show leave first; new cells arrive last.
+        """
+        present = {id(m) for m in old.submobjects}  # rows that an in-place step removed are gone from the grid
+        live = lambda key: key in old.cells and id(old.cells[key]) in present  # noqa: E731
+        shared = [c for c in new.shown if c in old.shown]
+        old_rows = [r for r in range(len(old.sample.rows)) if any(live((r, c)) for c in old.shown)]
+        found = _match(new.sample.rows, [old.sample.rows[r] for r in old_rows], [(c, c) for c in shared])
+        row_of = {k: old_rows[m] for k, m in enumerate(found) if m is not None}
+        moves = [(old.cells[r, c], new.cells[r, c]) for c in shared for r in (-3, -2, -1) if live((r, c)) and (r, c) in new.cells]
+        moves += [(old.cells[r, c], new.cells[k, c]) for c in shared for k, r in row_of.items() if live((r, c))]
+        moved, targets = {id(src) for src, _ in moves}, {id(dst) for _, dst in moves}
+        leaving = [cell for key, cell in old.cells.items() if live(key) and id(cell) not in moved]
+        arriving = [cell for cell in new.cells.values() if id(cell) not in targets]
+        if leaving:
+            self.play(*[FadeOut(cell, shift=DOWN * 0.2) for cell in leaving], run_time=0.5)
+        arc = lambda src, dst: 0.0 if abs(src.get_x() - dst.get_x()) < 0.05 else 0.7  # noqa: E731
+        self.play(Transform(old.title, new.title.copy()),
+                  *[Transform(src, dst.copy(), path_arc=arc(src, dst)) for src, dst in moves], run_time=1.5)
+        self.remove(*old.get_family())
+        self.add(*[m for m in new.submobjects if not any(m is cell for cell in arriving)])
+        if arriving:
+            self.play(*[FadeIn(cell) for cell in arriving], run_time=0.5)
+        self.add(new)
+
+    def _finish(self, i: int, step: Step, frame: ScopeFrame):
+        """The result shrinks into its card; replaced and expired cards leave; the shelf closes up.
+
+        When the next step continues the chain, the result stays on the stage for it, and its card
+        appears on the shelf without the result moving there.
+        """
+        self.carry = None  # a carried table that the step did not read leaves with the stage
+        continues = i + 1 < len(self.steps) and self.chain_of[i + 1] is self.chain_of[i] and self.result is not None
         persistent = {id(m) for m in self._persistent()}
         result = self.result or Group(*[m for m in self.mobjects if id(m) not in persistent])  # the stage can hold plain Groups
         family = {id(m) for m in result.get_family()}
@@ -656,7 +706,9 @@ class DebuggerScene(Scene):
         slots = dict(zip(frame.after, _card_slots(states)))
         pos, width = slots[frame.output]
         card = self._card(frame.output).set_state("output").scale_to_fit_width(width).move_to(pos)
-        anims = [FadeOut(m) for m in stage] + [FadeOut(result, target_position=pos, scale=0.12), FadeIn(card, scale=0.7)]
+        anims = [FadeOut(m) for m in stage] + [FadeIn(card, scale=0.7)]
+        if not continues:
+            anims.append(FadeOut(result, target_position=pos, scale=0.12))
         if self.caption:
             anims.append(FadeOut(self.caption))
         for key in [frame.replaced, *frame.expired]:
@@ -668,10 +720,14 @@ class DebuggerScene(Scene):
                 anims.append(self.cards[key].animate.set_state(state).scale_to_fit_width(w).move_to(p))
         self.play(*anims, run_time=1.3)
         self.cards[frame.output], self.caption = card, None
+        if continues:
+            self.carry, self.carry_op, self.chain_rows = result, frame.output, self.next_rows
+        else:
+            self.chain_rows = {}
         self._settle()
 
     def _persistent(self) -> list:
-        return [m for m in (self.frame, self.trace_panel, self.chrome, self.caption, *self.cards.values()) if m is not None]
+        return [m for m in (self.frame, self.trace_panel, self.chrome, self.caption, self.carry, *self.cards.values()) if m is not None]
 
     # -- helpers -----------------------------------------------------------------------------
 
@@ -688,9 +744,10 @@ class DebuggerScene(Scene):
 
     def _settle(self, *keep):
         """Keep only the debugger frame, the caption and `keep` on the screen."""
-        persistent = {id(m) for m in self._persistent()}
+        # manim splits a mobject into its parts when one part leaves the scene: keep the parts of what persists
+        persistent = {id(x) for m in self._persistent() for x in m.get_family()}
         self.remove(*[m for m in self.mobjects if id(m) not in persistent])
-        self.add(*keep)
+        self.add(*[m for m in (self.carry,) if m is not None], *keep)
 
     def _scale(self, grids, width: float, height: float) -> float:
         f = min(1.5, STAGE_W / width, (self.zone_top - ZONE_BOTTOM) / height)  # small tables grow, to stay readable
@@ -786,8 +843,11 @@ class DebuggerScene(Scene):
             self._flow
         )
         try:
-            handler(step, *self._with_facts(step, *_run_on_samples(step)))
+            ins, out, rows = _run_on_samples(step, self.chain_rows)
+            self.next_rows = {step.output.op(): (rows, out.partial)}  # for the next step, if it continues the chain
+            handler(step, *self._with_facts(step, ins, out))
         except Exception as exc:  # ponytail: an op shape that a choreography does not handle gets the plain flow
+            self.next_rows = {}
             print(f"ibis_anim: plain animation for step {step.op} ({exc!r})", file=sys.stderr)
             self._settle()
             self._flow(step, *_plain_samples(step))
@@ -834,8 +894,7 @@ class DebuggerScene(Scene):
         else:
             self._say(f"keep {len(idx)} of the {len(s.rows)} rows")
         self._subset_marks(grid, keep, marks=test is not None)
-        title = Text(f"result · {out.total} rows" + (" in full" if out.partial else ""), font=SANS, font_size=18, color=GREY_A)
-        self.play(Transform(grid.title, title.scale(grid.title.height / title.height).move_to(grid.title, aligned_edge=LEFT)))
+        self._retitle(grid, out)
         self._refresh_facts(grid, out)
         self.result = grid
 
@@ -918,6 +977,11 @@ class DebuggerScene(Scene):
         self._subset_marks(ga, [hit if verb == "intersect" else not hit for hit in in_b])
         self.play(FadeOut(gb))
         self._refresh_facts(ga, out)
+
+    def _retitle(self, grid: Grid, out: Sample):
+        """An in-place step keeps drawing its input table: at the end, its title names the result."""
+        title = Text(f"result · {out.total} rows" + (" in full" if out.partial else ""), font=SANS, font_size=18, color=GREY_A)
+        self.play(Transform(grid.title, title.scale(grid.title.height / title.height).move_to(grid.title, aligned_edge=LEFT)))
 
     def _refresh_facts(self, grid: Grid, out: Sample):
         """An in-place step keeps drawing its input table: at the end, its facts row takes the facts of the result."""
@@ -1003,6 +1067,7 @@ class DebuggerScene(Scene):
         if not self._reorder(grid, perm):
             self._say("the rows are already in this order", wait=0.3)
         self.play(LaggedStart(*[Indicate(grid.cell(r, names[0]), color=YELLOW) for r in range(len(perm))], lag_ratio=0.25), run_time=2)
+        self._retitle(grid, out)
         self._refresh_facts(grid, out)
         self.result = grid
 
