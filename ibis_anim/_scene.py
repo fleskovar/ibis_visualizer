@@ -28,6 +28,7 @@ from manim import (
 )
 
 from ibis_anim._derive import column_text, derive
+from ibis_anim._samples import bind, generate
 from ibis_anim._scope import ScopeFrame, chains, plan, table_names
 from ibis_anim._tracer import Step, _names, recording, trace
 
@@ -101,32 +102,33 @@ def _types(table) -> dict[str, str]:
     return {name: str(dtype).lstrip("!") for name, dtype in table.schema().items()}
 
 
-def _run_on_samples(step: Step, given: dict | None = None):
+def _run_on_samples(step: Step, given: dict | None = None, bind=lambda t: t):
     """The first rows of each input, the output of the step on these rows only, and the output rows as arrow.
 
     `given` maps an input op to (arrow rows, partial): in a chain, a step reads the rows that the step
     before it showed, not a new sample of the full table.
     """
-    given = given or {}
-    arrows = [given[t.op()][0] if t.op() in given else t.head(PREVIEW_ROWS).to_pyarrow() for t in step.inputs]
+    given = given or {}  # `bind` runs a table on generated rows when its sources have a schema only
+    arrows = [given[t.op()][0] if t.op() in given else bind(t).head(PREVIEW_ROWS).to_pyarrow() for t in step.inputs]
     mapping = {}
     for t, a in zip(step.inputs, arrows):
         mem = ibis.memtable(a)
         mapping[t.op()] = (mem if mem.schema() == t.schema() else mem.cast(t.schema())).op()
-    ins = [Sample(label, t.columns, a.to_pylist(), _count(t), partial=t.op() in given and given[t.op()][1],
+    ins = [Sample(label, t.columns, a.to_pylist(), _count(bind(t)), partial=t.op() in given and given[t.op()][1],
                   types=_types(t), source=t.op())
            for t, label, a in zip(step.inputs, step.labels, arrows)]
-    result = step.output.op().replace(mapping).to_expr().to_pyarrow()
+    result = bind(step.output.op().replace(mapping).to_expr()).to_pyarrow()  # a chained join also reads earlier sources
     partial = any(s.partial or len(s.rows) < s.total for s in ins)
-    out = Sample("result", step.output.columns, result.to_pylist(), _count(step.output), partial, _types(step.output))
+    out = Sample("result", step.output.columns, result.to_pylist(), _count(bind(step.output)), partial, _types(step.output))
     return ins, out, result.slice(0, MAX_RESULT_ROWS)
 
 
-def _plain_samples(step: Step) -> tuple[list[Sample], Sample]:
-    ins = [Sample(label, t.columns, t.head(PREVIEW_ROWS).to_pyarrow().to_pylist(), _count(t), types=_types(t), source=t.op())
-           for t, label in zip(step.inputs, step.labels)]
+def _plain_samples(step: Step, bind=lambda t: t) -> tuple[list[Sample], Sample]:
+    ins = [Sample(label, t.columns, bind(t).head(PREVIEW_ROWS).to_pyarrow().to_pylist(), _count(bind(t)), types=_types(t),
+                  source=t.op()) for t, label in zip(step.inputs, step.labels)]
     out = step.output
-    return ins, Sample("result", out.columns, out.head(PREVIEW_ROWS).to_pyarrow().to_pylist(), _count(out), types=_types(out))
+    return ins, Sample("result", out.columns, bind(out).head(PREVIEW_ROWS).to_pyarrow().to_pylist(), _count(bind(out)),
+                       types=_types(out))
 
 
 def _match(outs: list[dict], ins: list[dict], pairs, reuse=False) -> list[int | None]:
@@ -497,6 +499,7 @@ class DebuggerScene(Scene):
         except Exception as exc:  # the video works without facts
             print(f"ibis_anim: no facts ({exc!r})", file=sys.stderr)
             self.facts = {}
+        self.bind = bind(generate(steps, self.names, self.facts))  # sample rows for tables with a schema only
         self.chain_of = {i: run for run in chains(steps, self.names) for i in run}
         self.chrome = self.caption = self.trace_panel = self.result = self.carry = self.carry_op = None
         self.chain_rows, self.next_rows = {}, {}  # the rows that a chain hands from one step to the next
@@ -636,7 +639,7 @@ class DebuggerScene(Scene):
 
     def _card(self, key) -> Card:
         if key not in self.rows:
-            table = key.to_expr()
+            table = self.bind(key.to_expr())
             self.rows[key] = _count(table)
             self.previews[key] = table.head(3).to_pyarrow().to_pylist()
         facts = self.facts.get(key)
@@ -903,14 +906,14 @@ class DebuggerScene(Scene):
             self._flow
         )
         try:
-            ins, out, rows = _run_on_samples(step, self.chain_rows)
+            ins, out, rows = _run_on_samples(step, self.chain_rows, self.bind)
             self.next_rows = {step.output.op(): (rows, out.partial)}  # for the next step, if it continues the chain
             handler(step, *self._with_facts(step, ins, out))
         except Exception as exc:  # ponytail: an op shape that a choreography does not handle gets the plain flow
             self.next_rows = {}
             print(f"ibis_anim: plain animation for step {step.op} ({exc!r})", file=sys.stderr)
             self._settle()
-            self._flow(step, *_plain_samples(step))
+            self._flow(step, *_plain_samples(step, self.bind))
 
     # -- choreographies ----------------------------------------------------------------------
 

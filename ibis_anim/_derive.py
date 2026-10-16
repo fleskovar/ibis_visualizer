@@ -174,8 +174,18 @@ def _select(sel: exp.Select, env: dict) -> TableFacts:
     return TableFacts(out, keys, rows, warnings, can_empty=can_empty)
 
 
+def _then(before: str, after: str) -> str:
+    """The row relation of two operations one after the other, for example '≤ input' then '= input'."""
+    if before == "= input":
+        return after
+    if after == "= input" or after == before:
+        return before
+    return "?"
+
+
 def _join(join: exp.Join, cols, keys, rows, left_name, env, warnings):
     side, kind = (join.side or "").upper(), (join.kind or "").upper()
+    before = rows  # a chained join comes after the joins before it
     target = join.this
     if isinstance(target, exp.Unnest):  # each array element becomes a row: keys are lost
         alias = target.args.get("alias")
@@ -226,7 +236,7 @@ def _join(join: exp.Join, cols, keys, rows, left_name, env, warnings):
         rows = "?"
     # an outer join keeps the rows of its outer side; an inner, semi or anti join can match no row
     can_empty = side not in ("LEFT", "RIGHT", "FULL") and kind != "CROSS"
-    return cols | rcols, list(dict.fromkeys(new_keys)), rows, can_empty
+    return cols | rcols, list(dict.fromkeys(new_keys)), _then(before, rows), can_empty
 
 
 def _where(condition, cols, warnings):

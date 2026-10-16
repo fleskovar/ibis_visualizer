@@ -86,6 +86,17 @@ The analysis also finds possible mistakes:
 
 In the video, each table has a facts row above its type row. `any` means that no value set is known. After each step, a caption lists what the step guarantees, and the changed facts light up. Warnings show in red, and the trace marks the steps that will warn with ⚠ before they run. At exit, the warnings also print to the terminal.
 
+## Pipelines without data
+
+A pipeline can use tables that have a schema only: `ibis.table({"order_id": "int64", ...}, name="orders")`. Then ibis_anim generates a few rows for each such table when it renders the video. The rows come from the types of the columns and from the code:
+
+- each type has simple values: `A, B, C` for strings, `1, 2, 3` for integers, spread values for floats, dates from 2024-01-01
+- a declared key has distinct values; other columns repeat values, with different periods, so that their values combine in different ways
+- two columns that a join compares only partly match: one gets `A, B, C`, the other `A, D, C`. A declared foreign key (`references=`) takes its values from the column that it references
+- a column that the code compares with a literal (`status == "paid"`, `amount > 100`) gets the literal and values on both sides of the test, so that each test has rows that pass and rows that fail
+
+The generated rows illustrate the steps only. The facts do not come from them. See `examples/schema_only.py`.
+
 ## Use
 
 ```sh
@@ -95,11 +106,13 @@ python examples/rolling.py           # rolling sum, cumulative sum, order_by, li
 python examples/table_ops.py         # union, distinct, fill_null, cast, new columns, select, rename, unnest, intersect
 python examples/customer_health.py   # a realistic job: 5 tables, chains, a loop, a branch, 2 left joins, a rank (22 steps)
 python examples/conditions.py        # ibis.and_ and ibis.or_ in filters, ibis.ifelse in new columns
+python examples/schema_only.py       # schemas only, no data: the video uses generated rows
 IBIS_ANIM=0 python my_script.py      # run without the video
 python tests/test_tracer.py          # checks of the tracer
 python tests/test_scope.py           # checks of the tables panel plan
 python tests/test_facts.py           # checks of the facts and warnings
 python tests/test_conditions.py      # checks of the conditions of filters and ifelse
+python tests/test_samples.py         # checks of the generated rows
 ```
 
 To render one function only, call `ibis_anim.visualize(func, *args)`. To get the steps without a video, call `ibis_anim.trace(func, *args)`.

@@ -83,6 +83,8 @@ def test_steps_that_can_empty_a_table():
     assert filtered.can_empty and filtered.column("amount").nulls == NEVER  # no null passes `> 20`, and no row has to
     assert inner.can_empty and not left.can_empty and not grouped.can_empty and not mutated.can_empty
     assert not total.can_empty and total.rows == "1"  # an aggregate without group_by always gives one row
+    inner_first, chained = facts_of(lambda: orders.join(customers, "customer_id").left_join(tickets, "customer_id"))
+    assert chained.can_empty and chained.rows == "?"  # the inner join can drop rows; the left join can repeat them
 
 
 def test_warnings_point_at_mistakes():
