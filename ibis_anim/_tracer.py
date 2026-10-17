@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import functools
+import inspect
 import linecache
+import textwrap
 import os
 import sys
 import sysconfig
@@ -94,7 +97,9 @@ def _wrap(name, orig):
             out = orig(self, *args, **kwargs)
             if isinstance(out, ir.Table):
                 try:
-                    _steps.append(_make_step(name, self, out, args, kwargs))
+                    columns = _named_columns(args, kwargs)  # columns built earlier, outside a table call
+                    _steps.extend(step for step in columns if all(step.output.op() != s.output.op() for s in _steps))
+                    _steps.append(_make_step(name, self, out, args, kwargs, columns))
                 except Exception:  # ponytail: a step that cannot be recorded yet (e.g. an unfinished join) is skipped, never raised
                     pass
             return out
@@ -105,10 +110,12 @@ def _wrap(name, orig):
     return wrapper
 
 
-def _make_step(name, receiver, out, args, kwargs) -> Step:
+def _make_step(name, receiver, out, args, kwargs, columns=()) -> Step:
     grouped = isinstance(receiver, GroupedTable)
     src = receiver.table.to_expr() if grouped else receiver
     inputs = [src] + [a for a in (*args, *kwargs.values()) if isinstance(a, ir.Table)]
+    tables = len(inputs)
+    inputs += [c.output for c in columns]  # the one-column tables of the named columns that the call reads
     in_cols = {c for t in inputs for c in t.columns}
     frames = _user_frames()
     group_by = [g.name for g in receiver.groupings] if grouped else _names(kwargs.get("by"), src)
@@ -121,7 +128,7 @@ def _make_step(name, receiver, out, args, kwargs) -> Step:
         op=f"group_by → {name}" if grouped else name,
         inputs=inputs,
         output=out,
-        labels=[_label(t, frames) for t in inputs],
+        labels=[_label(t, frames) for t in inputs[:tables]] + [c.created[0] for c in columns],
         code=_call_source(frames[-1], ".group_by(" if grouped else f".{name}(") if frames else "",
         stack=[FrameSummary(f.f_code.co_filename, f.f_lineno, f.f_code.co_qualname) for f in frames],
         args=args,
@@ -130,6 +137,64 @@ def _make_step(name, receiver, out, args, kwargs) -> Step:
         used=used,
         created=created,
     )
+
+
+def _named_columns(args, kwargs) -> list[Step]:
+    """A 'column' step for each argument that is a column built earlier and held by a variable.
+
+    `label = ibis.coalesce(t.nick, t.player)` makes no table call, so nothing records it. When a table
+    call reads `label`, this finds the variable and its assignment in the source, and records the column
+    as a one-column table, `t.select(label=...)`, made at the line of the assignment.
+    """
+    frames = _user_frames()
+    if not frames:
+        return []
+    frame, found = frames[-1], []
+    values = [v for v in (*args, *kwargs.values()) for v in (v if isinstance(v, (list, tuple)) else (v,))]
+    for value in values:
+        if not isinstance(value, ir.Column) or isinstance(value.op(), ops.Field):
+            continue  # a bare field is a column of the table already
+        name = next((k for scope in (frame.f_locals, frame.f_globals) for k, v in scope.items() if v is value), None)
+        relations = {f.rel for f in value.op().find(ops.Field, filter=ops.Value)}
+        if name is None or len(relations) != 1:
+            continue  # an expression written in the call itself is part of the step
+        table = next(iter(relations)).to_expr()
+        line, text = _assignment(frame, name) or (frame.f_lineno, name)
+        stack = [FrameSummary(f.f_code.co_filename, f.f_lineno, f.f_code.co_qualname) for f in frames]
+        stack[-1] = FrameSummary(frame.f_code.co_filename, line, frame.f_code.co_qualname)
+        found.append(Step(
+            op="column",
+            inputs=[table],
+            output=table.select(**{name: value}),
+            labels=[_label(table, frames)],
+            code=f"{name} = {' '.join(text.split())}" if text != name else name,
+            stack=stack,
+            args=(),
+            kwargs={name: value},
+            used=list(dict.fromkeys(f.name for f in value.op().find(ops.Field, filter=ops.Value))),
+            created=[name],
+        ))
+    return found
+
+
+def _assignment(frame, name: str) -> tuple[int, str] | None:
+    """(line, source of the value) of the last assignment `name = ...` before the current line of `frame`."""
+    try:
+        lines, start = inspect.getsourcelines(frame.f_code)
+        source = textwrap.dedent("".join(lines))
+        tree = ast.parse(source)
+    except (OSError, TypeError, SyntaxError):
+        return None
+    offset = start - 1 if start > 0 else 0  # a module starts at line 0, a function at its def line
+    best = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            line = node.lineno + offset
+            if any(isinstance(t, ast.Name) and t.id == name for t in targets) and line <= frame.f_lineno:
+                if best is None or line > best[0]:
+                    best = (line, ast.get_source_segment(source, node.value) or name)
+    return best
 
 
 def _names(obj, table: ir.Table) -> list[str]:

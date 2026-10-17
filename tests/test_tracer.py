@@ -31,6 +31,22 @@ def test_methods_called_on_a_join_are_recorded():
     assert steps[1].labels == ["join result"] and steps[1].created == ["c"]
 
 
+def named_columns(t):
+    label = ibis_anim.coalesce(t.b, "none")
+    points = (t.a * 10).cast("int64")
+    return t.mutate(label=label, points=points, inline=t.a + 1)
+
+
+def test_columns_built_outside_a_table_call_are_steps():
+    t = ibis_anim.memtable({"a": [1, 2], "b": ["x", None]})
+    steps = ibis_anim.trace(named_columns, t)[1]
+    assert [s.op for s in steps] == ["column", "column", "mutate"]  # `inline` is part of the mutate
+    label, points, mutate = steps
+    assert label.code == 'label = ibis_anim.coalesce(t.b, "none")' and label.output.columns == ("label",)
+    assert points.stack[-1].lineno == label.stack[-1].lineno + 1  # each column has the line of its assignment
+    assert mutate.labels == ["t", "label", "points"] and mutate.inputs[1].op() == label.output.op()
+
+
 def test_drop_in_exposes_ibis():
     import ibis_anim.selectors as s
 
@@ -41,5 +57,6 @@ def test_drop_in_exposes_ibis():
 if __name__ == "__main__":
     test_trace_records_the_path_that_ran()
     test_methods_called_on_a_join_are_recorded()
+    test_columns_built_outside_a_table_call_are_steps()
     test_drop_in_exposes_ibis()
     print("ok")

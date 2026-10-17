@@ -22,7 +22,7 @@ import pyarrow as pa
 from manim import (
     BLACK, BLUE_D, BOLD, DOWN, GOLD_D, GREEN, GREEN_D, GREEN_E, GREY_A, GREY_B, GREY_C, ITALIC, LEFT, MAROON_C, NORMAL,
     ORANGE, ORIGIN, PI, PINK, PURPLE_B, RED, RED_E, RIGHT, TEAL_D, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_E,
-    GREY_D, AnimationGroup, Arrow, Group, Circumscribe, DashedLine, FadeIn, FadeOut, FadeTransform, Indicate, LaggedStart, Line,
+    GREY_D, AnimationGroup, Arrow, Circle, Create, Group, Circumscribe, DashedLine, FadeIn, FadeOut, FadeTransform, Indicate, LaggedStart, Line,
     Rectangle, ReplacementTransform, Rotate, RoundedRectangle, Succession, Scene, SurroundingRectangle, Text, Transform, TransformFromCopy, VectorizedPoint, VGroup,
     tempconfig,
 )
@@ -71,6 +71,10 @@ def render(steps: list[Step], name: str, output_dir="media", quality="low_qualit
               "output_file": name, "verbosity": "WARNING", "progress_bar": "none"}
     with recording(None), tempconfig(config):  # the previews run ibis methods: do not record them
         scene = DebuggerScene(steps, title=name)
+        clips = Path(scene.renderer.file_writer.sections_output_dir)
+        for old in clips.glob(f"{name}_*.mp4"):  # manim keeps the clips of earlier renders: only this render's clips stay
+            if re.fullmatch(rf"{re.escape(name)}_\d{{4}}_.*\.mp4", old.name):
+                old.unlink()
         scene.render()
         return Path(scene.renderer.file_writer.movie_file_path)
 
@@ -253,6 +257,23 @@ def _evaluate(values: list, table, rows: list[dict]) -> list[list]:
     return [[r[f"v{k}"] for k in range(len(values))] for r in found]
 
 
+def _inserted_columns(step: Step, ins: list, computed: list) -> dict:
+    """New columns of a step that come from a column built earlier: new name → (its one-column sample, its name).
+
+    A column step makes a one-column table; the step that reads the column lists that table as an input.
+    """
+    values = getattr(step.output.op(), "values", {})
+    found = {}
+    for table, sample in zip(step.inputs[1:], ins[1:]):
+        own = getattr(table.op(), "values", {})
+        if len(own) == 1:
+            cname, cvalue = next(iter(own.items()))
+            target = next((c for c in computed if c not in found and values.get(c) == cvalue), None)
+            if target is not None:
+                found[target] = (sample, cname)
+    return found
+
+
 def _window(step: Step):
     """(column, window function) for the first computed column that is a window function."""
     values = getattr(step.output.op(), "values", {})
@@ -422,7 +443,7 @@ class Grid(VGroup):
 class Card(VGroup):
     """One table on the tables shelf: name, shape, and a mini table of its first rows."""
 
-    def __init__(self, name: str, table, rows: int, preview: list[dict], key: str = ""):
+    def __init__(self, name: str, table, rows: int, preview: list[dict], key: str = "", note: str = ""):
         super().__init__()
         self.box = RoundedRectangle(corner_radius=0.07, width=THUMB_W, height=THUMB_H, stroke_width=1.2, stroke_color=GREY_B)
         self.box.set_fill(CARD_FILL, 1)
@@ -447,7 +468,7 @@ class Card(VGroup):
                 mini.add(VGroup(cell, label.move_to(cell)))
         more = len(table.columns) - len(columns)
         self.add(self.box, title, shape, mini)
-        footer = " · ".join(t for t in (f"key: {key}" if key else "", f"+{more} more columns" if more else "") if t)
+        footer = " · ".join(t for t in (note, f"key: {key}" if key else "", f"+{more} more columns" if more else "") if t)
         if footer:
             line = Text(footer, font=SANS, font_size=11, color=FACTS_TEXT if key else GREY_B)
             if line.width > THUMB_W - 0.16:
@@ -500,6 +521,7 @@ class DebuggerScene(Scene):
             print(f"ibis_anim: no facts ({exc!r})", file=sys.stderr)
             self.facts = {}
         self.bind = bind(generate(steps, self.names, self.facts))  # sample rows for tables with a schema only
+        self.columns_from = {s.output.op(): s.labels[0] for s in steps if s.op == "column"}
         self.chain_of = {i: run for run in chains(steps, self.names) for i in run}
         self.chrome = self.caption = self.trace_panel = self.result = self.carry = self.carry_op = None
         self.chain_rows, self.next_rows = {}, {}  # the rows that a chain hands from one step to the next
@@ -644,7 +666,10 @@ class DebuggerScene(Scene):
             self.previews[key] = table.head(3).to_pyarrow().to_pylist()
         facts = self.facts.get(key)
         first_key = ", ".join(sorted(min(facts.keys, key=len))) if facts and facts.keys else ""
-        return Card(self.names.get(key, "table"), key.to_expr(), self.rows[key], self.previews[key], first_key)
+        made_by = self.columns_from.get(key)  # a one-column table of a column built outside a table call
+        note = f"a column of {made_by}" if made_by else ""
+        return Card(self.names.get(key, "table"), key.to_expr(), self.rows[key], self.previews[key],
+                    "" if made_by else first_key, note)
 
     def _activate(self, frame: ScopeFrame):
         """New tables join the shelf; the step's inputs light up and grow; the others dim."""
@@ -902,7 +927,7 @@ class DebuggerScene(Scene):
             self._set_op if verb in ("union", "intersect", "difference") else
             self._unnest if verb == "unnest" else
             self._window if _window(step) else
-            self._columns if verb in ("mutate", "select", "drop", "rename", "relocate", "cast", "try_cast") else
+            self._columns if verb in ("mutate", "select", "drop", "rename", "relocate", "cast", "try_cast", "column") else
             self._flow
         )
         try:
@@ -1013,7 +1038,44 @@ class DebuggerScene(Scene):
         self.result = grid
 
     def _distinct(self, step: Step, ins: list[Sample], out: Sample):
-        self._subset(step, ins, out, test="is this the first time that the row appears?")
+        """Take each row in turn; scan the rows below it; the duplicates turn red and leave; go to the next row."""
+        s = ins[0]
+        on = [c for c in _names(step.kwargs.get("on"), step.inputs[0]) if c in s.columns] or list(s.columns)
+        grid = Grid(s, _pick_columns(s.columns, on), _cell_width([s], s.columns), used=on if on != s.columns else ())
+        self._in_place(grid)
+        self._enter(grid)
+        compared = f"all {len(on)} columns" if on == list(s.columns) else ", ".join(on)
+        self._say(f"distinct: a row leaves when a row above it has the same values in {compared}")
+        same = lambda i, j: all(s.rows[i][c] == s.rows[j][c] for c in on)  # noqa: E731 (SQL: nulls are equal here)
+        y = lambda slot: grid.slot(slot, 0)[1]  # noqa: E731
+        alive, slot = list(range(len(s.rows))), {i: i for i in range(len(s.rows))}
+        p = 0
+        while p < len(alive):
+            i = alive[p]
+            current = SurroundingRectangle(grid.row(i), color=YELLOW, buff=0.02, stroke_width=3)
+            self.play(Create(current), run_time=0.4)
+            below, dups = alive[p + 1:], []
+            if below:
+                scanner = SurroundingRectangle(grid.row(below[0]), color=GREY_B, buff=0.02, stroke_width=2)
+                self.play(FadeIn(scanner), run_time=0.2)
+                for j in below:
+                    self.play(scanner.animate.move_to(grid.row(j)), run_time=0.25)
+                    if same(i, j):
+                        dups.append(j)
+                        self.play(*[c[0].animate.set_fill(RED_E, 0.75) for c in grid.row(j)], run_time=0.3)
+                self.play(FadeOut(scanner), run_time=0.2)
+            if dups:
+                self._drop(grid, [grid.row(j) for j in dups])
+                alive = [k for k in alive if k not in dups]
+                moves = [grid.row(k).animate.shift(UP * (y(n) - y(slot[k]))) for n, k in enumerate(alive) if slot[k] != n]
+                slot |= {k: n for n, k in enumerate(alive)}
+                if moves:
+                    self.play(*moves, run_time=0.6)
+            self.play(FadeOut(current), run_time=0.2)
+            p += 1
+        self._retitle(grid, out)
+        self._refresh_facts(grid, out)
+        self.result = grid
 
     def _drop_null(self, step: Step, ins: list[Sample], out: Sample):
         op = step.output.op()
@@ -1081,13 +1143,62 @@ class DebuggerScene(Scene):
                 self.play(*[rows[i].animate.shift(UP * (ga.slot(j, 0)[1] - ga.slot(i, 0)[1])) for j, i in enumerate(kept) if j != i])
             self._refresh_facts(ga, out)
             return
-        self._side_by_side([ga, gb], gap=1.5)
+        self._side_by_side([ga, gb], gap=2.2)  # room for the lines between equal rows
         self._enter(ga, gb)
-        word = "is also in" if verb == "intersect" else "is not in"
-        self._say(f"{verb}: keep each row of {step.labels[0]} that {word} {step.labels[1]} (same colour = same row)")
-        self._subset_marks(ga, [hit if verb == "intersect" else not hit for hit in in_b])
+        self._compare_rows(step, verb, a, b, ga, gb, colors)
         self.play(FadeOut(gb))
         self._refresh_facts(ga, out)
+
+    def _compare_rows(self, step: Step, verb: str, a: Sample, b: Sample, ga: Grid, gb: Grid, colors: dict):
+        """Intersect and difference compare whole rows: all the columns, not some of them.
+
+        Each row of the first table looks for a row of the second one with the same values in every
+        column: a solid line joins equal rows. When the nearest row shares only some values, a dashed
+        line points to it and the cells that differ turn red: such a row does not count.
+        """
+        columns, (first, second) = a.columns, step.labels[:2]
+        listed = ", ".join(columns) if len(columns) <= 5 else ", ".join(columns[:5]) + ", …"
+        self._say(f"{verb} compares whole rows: a row stays when {second} {'has' if verb == 'intersect' else 'has no'} "
+                  f"a row with the same values in all {len(columns)} columns ({listed})")
+        self.play(*[Circumscribe(g.header(c), color=YELLOW, buff=0.02) for g in (ga, gb) for c in g.shown], run_time=1.2)
+        rh = ga.slot(0, 0)[1] - ga.slot(1, 0)[1]
+        decorations = [VGroup() for _ in a.rows]
+        found = []
+        for i, ra in enumerate(a.rows):
+            same = [sum(ra[c] == rb[c] for c in columns) for rb in b.rows]
+            equal = next((j for j, n in enumerate(same) if n == len(columns)), None)
+            found.append(equal is not None)
+            row_box = SurroundingRectangle(ga.row(i), buff=0.02, stroke_width=2,
+                                           color=_color(colors, tuple(ra[c] for c in columns)) if equal is not None else GREY_B)
+            anims, passing = [Create(row_box)], []
+            if equal is not None:
+                partner = SurroundingRectangle(gb.row(equal), buff=0.02, stroke_width=2, color=row_box.get_color())
+                link = Line(row_box.get_right(), partner.get_left(), color=row_box.get_color(), stroke_width=2.5)
+                anims += [Create(partner), Create(link)]
+                passing += [partner, link]
+            else:
+                near = max(range(len(b.rows)), key=lambda j: same[j]) if b.rows else None
+                if near is not None and same[near] > 0:
+                    differ = [c for c in columns if ra[c] != b.rows[near][c]]
+                    link = DashedLine(row_box.get_right(), gb.row(near).get_left(), color=RED, stroke_width=2)
+                    label = Text("≠ " + ", ".join(differ[:2]) + (" …" if len(differ) > 2 else ""), font=SANS, font_size=14,
+                                 color=RED).next_to(link, UP, buff=0.04)
+                    cells = [SurroundingRectangle(gb.cell(near, c), color=RED, buff=0.01) for c in differ if c in gb.shown]
+                    anims += [Create(link), FadeIn(label), *[Create(c) for c in cells]]
+                    passing += [link, label, *cells]
+                else:
+                    label = Text("no equal row", font=SANS, font_size=14, color=RED).next_to(row_box, RIGHT, buff=0.15)
+                    anims.append(FadeIn(label))
+                    passing.append(label)
+            keep = found[-1] if verb == "intersect" else not found[-1]
+            mark = _mark(keep, rh).next_to(ga.row(i), LEFT, buff=0.12)
+            self.play(*anims, FadeIn(mark, scale=1.5), run_time=0.9)
+            self.wait(1.0)  # time to read the comparison
+            self.play(*[FadeOut(m) for m in passing], FadeOut(row_box), run_time=0.4)
+            decorations[i].add(mark)
+        kept = [f if verb == "intersect" else not f for f in found]
+        self._say(f"keep the rows with ✔: {sum(kept)} of {len(kept)}", wait=0.2)
+        self._subset_marks(ga, kept, marks=False, extra=decorations)
 
     def _retitle(self, grid: Grid, out: Sample):
         """An in-place step keeps drawing its input table: at the end, its title names the result."""
@@ -1212,8 +1323,18 @@ class DebuggerScene(Scene):
         res = Grid(out, out_shown, width, created=[*computed, *renamed.values()])
         inplace = out_shown[: len(in_shown)] == in_shown  # the table only grows to the right
         reshape = not inplace and not new  # columns leave, move or change name, in place
-        self._in_place(inp, res) if inplace or reshape else self._side_by_side([inp, res], gap=1.5)
-        self._enter(inp)
+        inserts = _inserted_columns(step, ins, computed)  # new columns that come from columns built earlier
+        columns = {c: Grid(sample, [cname], width, created=[cname]) for c, (sample, cname) in inserts.items()}
+        if inplace or reshape:
+            self._in_place(inp, res, margin=2.5 + len(columns) * (width + 0.5))
+            left = res.get_right()[0]
+            for g in columns.values():  # the columns wait on the right, at the height of the table
+                g.scale(res.cell_w / g.cell_w, about_point=ORIGIN)
+                g.shift([left + 0.4 * res.cell_w - g.get_left()[0], res.slot(-1, 0)[1] - g.slot(-1, 0)[1], 0])
+                left = g.get_right()[0]
+        else:
+            self._side_by_side([inp, res, *columns.values()], gap=1.5)
+        self._enter(inp, *columns.values())
         if inplace and not any(c in computed for c in out_shown):
             self._say("no change in the columns shown")
         if reshape:
@@ -1233,7 +1354,7 @@ class DebuggerScene(Scene):
                 self._say(f"rename {', '.join(f'{i} → {o}' for o, i in renames)}")
                 self.play(*[Transform(inp.header(i), res.header(o)) for o, i in renames], run_time=1.2)
         elif not inplace:
-            dropped = [c for c in in_shown if c not in carried.values()]
+            dropped = [c for c in in_shown if c not in carried.values()] if verb != "column" else []  # a column step derives
             if dropped:
                 self._say(f"drop {', '.join(dropped)}")
                 self.play(*[c[0].animate.set_fill(RED_E, 0.6) for n in dropped for c in inp.column(n)], run_time=0.8)
@@ -1244,6 +1365,9 @@ class DebuggerScene(Scene):
                 self._say(f"rename {', '.join(moves)}" if moves else f"keep {', '.join(o for o, _ in kept)}")
                 self.play(FadeIn(res.title), LaggedStart(*[TransformFromCopy(inp.column(i), res.column(o)) for o, i in kept], lag_ratio=0.2), run_time=2)
         for name in [c for c in out_shown if c in computed]:
+            if name in columns:
+                self._insert(name, columns[name], inserts[name][1], res, idx)
+                continue
             reads = [f for f in sources.get(name, []) if f in in_shown]
             self._say(_formula(step, name), wait=0.3)
             self._highlight(inp, reads)
@@ -1253,6 +1377,8 @@ class DebuggerScene(Scene):
             value = getattr(step.output.op(), "values", {}).get(name)
             if isinstance(value, ops.IfElse):
                 self._ifelse(step, name, value, s, inp, res, idx)
+            elif isinstance(value, ops.Coalesce):
+                self._coalesce(step, name, value, s, inp, res, idx)
             elif groups:
                 self._say("the same thing happens on every row", wait=0)
                 self._fly(groups, run_time=1.4 + 0.35 * len(groups), lag_ratio=0.3)
@@ -1266,6 +1392,79 @@ class DebuggerScene(Scene):
                 self.play(Circumscribe(res.type_cell(name), color=GREEN, buff=0.03), run_time=1)
         self._settle(*([res] if inplace or reshape else [inp, res]))
         self.result = res
+
+    def _insert(self, name: str, column: Grid, cname: str, res: Grid, idx: list):
+        """A column built earlier slides into the table: each of its cells moves to the cell of its row."""
+        self._say(f"insert the column {cname}" + (f" as {name}" if cname != name else "") + ": each value goes to its row", wait=0.3)
+        self.play(Circumscribe(column.column(cname), color=GREEN, buff=0.03), run_time=0.8)
+        pairs = [[(column.header(cname), res.header(name))]]
+        pairs += [[(column.cell(i, cname), res.cell(k, name))] for k, i in enumerate(idx) if i is not None and i < len(column.sample.rows)]
+        self._fly(pairs, run_time=1.0 + 0.3 * len(pairs), lag_ratio=0.25, path_arc=-0.5)
+        self.play(FadeOut(column), run_time=0.4)
+
+    def _coalesce(self, step: Step, name: str, value, s: Sample, inp: Grid, res: Grid, idx: list):
+        """ibis.coalesce: per row, a pointer tries the values in the order of the arguments; a null sends it to
+        the next value; the first value that is not null moves into the new cell."""
+        args = list(value.arg)
+        found = _evaluate(args, step.inputs[0], s.rows)
+        texts = [_expr_text(a) for a in args]
+        self._say(f"{name} = coalesce({', '.join(texts)}): take the first value that is not null, in the order of the arguments",
+                  wait=0.3)
+        cw = res.cell_w
+        rh = res.slot(0, 0)[1] - res.slot(1, 0)[1]
+        constants = {j: _label_cell(t, cw, rh, TEST_FILL) for j, (a, t) in enumerate(zip(args, texts))
+                     if not (isinstance(a, ops.Field) and a.name in inp.shown)}
+        if constants:  # a value that is not a column of the table waits beside the new column
+            chips = VGroup(*constants.values()).arrange(DOWN, buff=0.08)
+            chips.next_to(res.header(name), RIGHT, buff=0.3 + cw * 0.3).align_to(res.header(name), UP)
+            self.play(FadeIn(chips, shift=LEFT * 0.2), run_time=0.5)
+        order = "  →  ".join(f"{j + 1}. {t}" for j, t in enumerate(texts))
+        original = list(inp.shown)
+        in_args = list(dict.fromkeys(a.name for j, a in enumerate(args) if j not in constants))
+        arranged = [*in_args, *(c for c in original if c not in in_args)]
+        if arranged != original:  # the columns go in the order of the arguments, so that the search reads from left to right
+            self._say(f"put the columns in the order of the arguments: {', '.join(in_args)}", wait=0.2)
+            self._arrange_columns(inp, arranged)
+        self._say(f"try in order, from left to right: {order}", wait=0.2)
+        badges = VGroup()  # the number of each argument, on its column or its constant
+        for j, a in enumerate(args):
+            where = constants[j] if j in constants else inp.header(a.name)
+            badge = Text(str(j + 1), font=SANS, font_size=14, weight=BOLD, color=BLACK)
+            dot = Circle(radius=0.13, stroke_width=0).set_fill(YELLOW, 1)
+            badges.add(VGroup(dot, badge.move_to(dot)).scale(where.height / 0.4 * 0.8).move_to(where.get_corner(UL)))
+        self.play(LaggedStart(*[FadeIn(b, scale=1.5) for b in badges], lag_ratio=0.3), run_time=0.8)
+        for k, i in enumerate(idx):
+            if i is None:
+                continue
+            spots = [inp.cell(i, a.name) if j not in constants else constants[j] for j, a in enumerate(args)]
+            pointer = SurroundingRectangle(spots[0], color=YELLOW, buff=0.02, stroke_width=3)
+            self.play(Create(pointer), run_time=0.25)
+            for j, spot in enumerate(spots):
+                if j:
+                    self.play(pointer.animate.become(SurroundingRectangle(spot, color=YELLOW, buff=0.02, stroke_width=3)), run_time=0.3)
+                if found[i][j] is None:
+                    note = Text("null → next", font=SANS, font_size=12, color=RED).next_to(pointer, UP, buff=0.03)
+                    self.play(pointer.animate.set_color(RED), FadeIn(note), run_time=0.25)
+                    self.play(FadeOut(note), run_time=0.15)
+                    continue
+                self.play(pointer.animate.set_color(GREEN), run_time=0.2)
+                self._fly([[(spot, res.cell(k, name))]], run_time=0.6)
+                break
+            else:  # every value is null: so is the result
+                self.play(FadeIn(res.cell(k, name)), run_time=0.3)
+            self.play(FadeOut(pointer), run_time=0.15)
+        self.play(FadeOut(badges), *([FadeOut(chips)] if constants else []), run_time=0.4)
+        if arranged != original:
+            self._say("the columns go back to their place in the table", wait=0)
+            self._arrange_columns(inp, original)
+
+    def _arrange_columns(self, grid: Grid, order: list[str]):
+        """Move the columns of `grid` into `order`, along arcs, so that the moves are easy to follow."""
+        moves = [grid.column(c).animate(path_arc=-0.6).shift(RIGHT * (grid.slot(-1, order.index(c))[0] - grid.slot(-1, grid.shown.index(c))[0]))
+                 for c in grid.shown if order.index(c) != grid.shown.index(c)]
+        if moves:
+            self.play(*moves, run_time=1.2)
+        grid.shown = list(order)
 
     def _ifelse(self, step: Step, name: str, value, s: Sample, inp: Grid, res: Grid, idx: list):
         """ibis.ifelse: each row tests the condition; the value of the chosen branch moves into the new cell."""

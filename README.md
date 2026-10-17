@@ -34,7 +34,9 @@ The script runs as before. At exit, the video goes to `media/videos/480p15/<scri
 | `filter` | Each row gets ✔ or ✘. The failed rows turn red and leave. The other rows slide up. |
 | `filter` with several tests (`ibis.and_`, `ibis.or_`, `&`, `\|`) | Each test gets a column of ✔/✘, with the columns that it reads highlighted. Then, per row, the marks merge into the result column (`1 AND 2`, `1 OR 2`, `1 AND (2 OR 3)`), and the failed rows leave. A null test shows `–`: it does not keep the row. |
 | `ibis.ifelse` in `mutate` or `select` | A legend shows the two branches (`✔ → 'large'`, `✘ → 'small'`). Per row, the cells of the test flash, the row gets ✔/✘, and the value of the chosen branch moves into the new cell: the row's own cell for a column, the legend for a constant. |
-| `distinct`, `drop_null`, semi and anti `join` | The same as `filter`, with the test of the operation. |
+| `ibis.coalesce` in a new column | First, the columns of the arguments move into the order of the arguments, at the left of the table. A number (1, 2, …) marks each argument, on its column or on a chip for a constant. Per row, a pointer starts at argument 1 and reads from left to right. A null turns the pointer red (`null → next`) and sends it to the next argument. The first value that is not null turns the pointer green and moves into the new cell. When all the values are null, the result is null. At the end, the columns go back to their place in the table. |
+| `distinct` | The caption names the compared columns (all of them, or the `on=` columns). The current row is outlined in yellow, and a scanner moves down the rows below it. The rows with the same values turn red and leave, and the other rows slide up. Then the next row is the current row. |
+| `drop_null`, semi and anti `join` | The same as `filter`, with the test of the operation. |
 | `limit`, `head`, `sample` | A cut line or a count, then the removed rows leave. |
 | `order_by` | The sort column is yellow, an arrow shows the direction, and the rows move along arcs to their new positions. |
 | `mutate`, `select`, `cast` | A caption shows the formula of each new column. For each row, the source cells move into the new cell, with a short delay between rows. |
@@ -44,14 +46,25 @@ The script runs as before. At exit, the video goes to `media/videos/480p15/<scri
 | `join` | The join columns move to the inner edges and the tables come together. The rows line up on equal keys, and the key columns overlap and merge. |
 | `pivot_wider` | Distinct names move into column headers. The id columns become one row per value. The empty cells light up, then each value moves to its cell. |
 | `pivot_longer` | For each row, the pivoted cells rotate into a vertical column of the result. |
-| `union`, `intersect`, `difference` | Union puts the second table under the first. Intersect and difference test each row against the other table. |
+| `union` | The rows of the second table go under the rows of the first. With `distinct=True`, the repeated rows leave. |
+| `intersect`, `difference` | The caption says that the whole row is compared, and names all the columns. For each row of the first table, a solid line joins it to the equal row of the second table (✔). When the nearest row has only some equal values, a dashed red line points to it, the cells that differ turn red, and a label (`≠ score`) names them (✘). Then the rows that do not stay leave. |
 | `fill_null` | The null cells light up red and take the replacement value. |
 | `unnest` | Each array cell splits into its elements, and each element moves to its own row. |
 | other ops | Each result column comes from the input column with the same name. |
 
 When a step changes the type of a column (`cast`, `try_cast`, or a `mutate` with `.cast(...)`), the type cell changes after the values convert, for example `float64 → int64`.
 
-Columns that the arguments read are yellow. New columns are green. A column that you build outside the table, for example `points = (t.score * 10).cast("int64")`, shows its formula when `mutate` or `select` puts it into a table.
+Columns that the arguments read are yellow. New columns are green.
+
+A column that you build outside a table call is a step of its own. For example:
+
+```python
+label = ibis.coalesce(players.nick, players.player)
+points = (players.score * 10).cast("int64")
+players = players.mutate(label=label, points=points)
+```
+
+This gives three steps. The first two are `column` steps, at the lines of the assignments: the source cells merge into a new one-column table, `label` or `points`, and that table goes to the shelf as "a column of players". At the `mutate`, the cards of `label` and `points` light up, their tables come onto the stage, and each cell moves into the new column, to its row. The column step is recorded when a table call reads the variable. An expression that you write in the call itself (`mutate(x=t.a + 1)`) is part of that step.
 
 ## Facts: what each step guarantees
 

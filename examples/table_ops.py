@@ -11,10 +11,10 @@ def load():
         "tags": [["pro", "eu"], ["new"], [], ["pro", "eu"]],
     })
     tuesday = ibis.memtable({
-        "player": ["dee", "bob"],
-        "nick": ["Dee", None],
-        "score": [9, None],
-        "tags": [["us"], ["new"]],
+        "player": ["dee", "bob", "ann"],
+        "nick": ["Dee", None, "A"],
+        "score": [9, None, 15],  # ann played again with another score: the same player, but not the same row
+        "tags": [["us"], ["new"], ["pro", "eu"]],
     })
     return monday, tuesday
 
