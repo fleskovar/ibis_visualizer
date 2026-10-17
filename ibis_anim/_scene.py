@@ -39,6 +39,7 @@ MAX_COLUMNS = 6
 MAX_RESULT_ROWS = 8
 ROW_H = 0.4
 FACTS_H = 0.5
+META_GAP = 0.14  # space between the metadata rows (facts, types) and the table itself
 BAR_BOTTOM = 3.08  # top bar: step, call path and the current statement
 CODE_Y = 3.3
 STRIP_Y, CAPTION_Y = 2.72, 2.32  # the pipeline of the statement, then the caption of the phase
@@ -381,10 +382,10 @@ class Grid(VGroup):
             self.cells[-1, name] = _cell(name, width, fill, 1, header=True, dark=marked).move_to([x, 0, 0])
             if types:  # a type row above the header, as row -2
                 self.cells[-2, name] = _cell(sample.types.get(name, "?"), width, GREEN_E if name in created else TYPE_FILL,
-                                             1, dark=name in created, italic=True).move_to([x, ROW_H, 0])
+                                             1, dark=name in created, italic=True).move_to([x, ROW_H + META_GAP, 0])
             if sample.facts:  # a facts row above the type row, as row -3
                 self.cells[-3, name] = _facts_cell(sample.facts.get(name, ""), width, name in sample.changed).move_to(
-                    [x, ROW_H * 1.5 + FACTS_H / 2, 0])
+                    [x, ROW_H * 1.5 + FACTS_H / 2 + META_GAP, 0])
             for r, row in enumerate(sample.rows):
                 cell = _cell(_fmt(row.get(name)), width, fill, 0.18 if marked else 0)
                 self.cells[r, name] = cell.move_to([x, -(r + 1) * ROW_H, 0])
