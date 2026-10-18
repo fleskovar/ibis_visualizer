@@ -29,10 +29,11 @@ The videos are 1080p at 30 frames per second. For faster renders, set `IBIS_ANIM
 3. Python control flow needs no special handling. An `if` records only the branch that ran. A loop records one step per iteration.
 4. The video looks like a debugger. The video renders after the run, so it also shows what comes next.
    - Top bar: the operation, the call path (`customer_health › clean()`) and the whole current statement, with its line numbers. A long line wraps. In a statement of several lines, the line of the current call is lit. A statement of more than 6 lines shows the 6 lines around the current call.
-   - Trace (left): each function call with the tables that it reads (`stg_orders(orders)`), its steps under it, and `→ name` for the table that it hands on to a later step. Done steps have ✔, the current step has ▸, and the next steps are grey.
+   - Trace (left): each function call with the tables that it reads (`usa_stores(stg_stores)`), its steps under it, and a line for each table that it hands on, with the calls that read it (`→ stg_stores to usa_stores()`). Done steps have ✔, the current step has ▸, and the next steps are grey.
    - Pipeline (above the stage): the statement as a flow, for example `items → join(products, "sku") → mutate(…) → group_by(…).aggregate(…) → revenue`. The current call is lit. A chain of calls in one statement shows as one pipeline.
    - Stage (middle): the animation of the step. Each table has a row with the types of its columns above the header.
-   - Tables in scope (bottom): each table is a mini table with its name (the variable that holds it), shape and first rows. The tables that the step reads light up yellow and grow. The result shrinks into a green card.
+   - Program (bottom left): the program as a graph, left to right: the source tables, each function call, and the result. The current call is yellow, and the calls that ran are green. The arrows into the current call are yellow and name the tables that it reads.
+   - Tables in scope (bottom right): each table is a mini table with its name (the variable that holds it), shape and first rows. The tables that the step reads light up yellow and grow. The result shrinks into a green card.
    - When the result rebinds a variable (`orders = orders.filter(...)`), or a chain goes on, the result card takes the place of the input card.
    - When the next step works on the result (`shipped = orders.filter(...)`, then `shipped.mutate(...)`), the result stays on the stage and moves into the next step. It does not go to the shelf and come back.
    - A result that no variable holds gets a name from its operation: `filtered orders`, `orders × stores`, `orders with total`, `revenue by region`. The result of a dbt-ibis model has the name of the model.
@@ -43,7 +44,7 @@ The videos are 1080p at 30 frames per second. For faster renders, set `IBIS_ANIM
 
 | Operation | Animation |
 | --- | --- |
-| `filter` | Each row gets ✔ or ✘. The failed rows turn red and leave. The other rows slide up. |
+| `filter` | A label at the right of the table shows the condition (`keep rows where amount > 100`). Each row gets ✔ or ✘. The failed rows turn red and leave. The other rows slide up. |
 | `filter` with several tests (`ibis.and_`, `ibis.or_`, `&`, `\|`) | Each test gets a column of ✔/✘, with the columns that it reads highlighted. Then, per row, the marks merge into the result column (`1 AND 2`, `1 OR 2`, `1 AND (2 OR 3)`), and the failed rows leave. A null test shows `–`: it does not keep the row. |
 | `ibis.ifelse` in `mutate` or `select` | A legend shows the two branches (`✔ → 'large'`, `✘ → 'small'`). Per row, the cells of the test flash, the row gets ✔/✘, and the value of the chosen branch moves into the new cell: the row's own cell for a column, the legend for a constant. |
 | `ibis.coalesce` in a new column | First, the columns of the arguments move into the order of the arguments, at the left of the table. A number (1, 2, …) marks each argument, on its column or on a chip for a constant. Per row, a pointer starts at argument 1 and reads from left to right. A null turns the pointer red (`null → next`) and sends it to the next argument. The first value that is not null turns the pointer green and moves into the new cell. When all the values are null, the result is null. At the end, the columns go back to their place in the table. |

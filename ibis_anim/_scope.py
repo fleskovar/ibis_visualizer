@@ -8,6 +8,7 @@ result of a step takes the place of its first input when no later step reads tha
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 
@@ -100,6 +101,40 @@ def chains(steps, names: dict) -> list[list[int]]:
         else:
             runs.append([i])
     return runs
+
+
+@dataclass(frozen=True)
+class Call:
+    """A run of steps in one function call, or in the code of a module: a node of the program graph."""
+
+    name: str  # `stg_orders()`, or the file of module-level code
+    depth: int  # the number of calls around it
+    steps: list[int]
+    reads: list  # tables that the call reads and did not make: its arguments, in order of use
+    hands: list  # tables that the call made and a later call reads; the last call also hands on its result
+
+
+def calls(steps) -> list[Call]:
+    """The calls of the program in the order that they ran. Table `t` flows from call A to call B when
+    `t` is in A.hands and in B.reads."""
+    runs = []
+    for i, step in enumerate(steps):
+        path = tuple(f"{f.name}()" for f in step.stack if f.name != "<module>")
+        path = path or (os.path.basename(step.stack[-1].filename) if step.stack else "?",)  # module-level code: the script
+        if runs and runs[-1][0] == path:
+            runs[-1][1].append(i)
+        else:
+            runs.append((path, [i]))
+    found = []
+    for k, (path, run) in enumerate(runs):
+        made = list(dict.fromkeys(steps[i].output.op() for i in run))
+        later = {t.op() for _, rest in runs[k + 1:] for i in rest for t in steps[i].inputs}
+        reads = list(dict.fromkeys(t.op() for i in run for t in steps[i].inputs if t.op() not in made))
+        hands = [op for op in made if op in later]
+        if k == len(runs) - 1 and made[-1] not in hands:
+            hands.append(made[-1])  # the result of the program
+        found.append(Call(path[-1], len(path) - 1, run, reads, hands))
+    return found
 
 
 def plan(steps, keep_idle: int = 2) -> list[ScopeFrame]:

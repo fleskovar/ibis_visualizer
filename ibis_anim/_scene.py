@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import ast
 import functools
-import itertools
 import linecache
 import math
 import os
@@ -26,14 +25,14 @@ import pyarrow as pa
 from manim import (
     BLACK, BLUE_D, BOLD, DOWN, GOLD_D, GREEN, GREEN_D, GREEN_E, GREY_A, GREY_B, GREY_C, ITALIC, LEFT, MAROON_C, NORMAL,
     ORANGE, ORIGIN, PI, PINK, PURPLE_B, RED, RED_E, RIGHT, TEAL_D, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_E,
-    GREY_D, AnimationGroup, Arrow, Circle, Create, Group, Circumscribe, DashedLine, FadeIn, FadeOut, FadeTransform, Indicate, LaggedStart, Line,
+    GREY_D, AnimationGroup, Arrow, Circle, Create, CurvedArrow, Group, Circumscribe, DashedLine, FadeIn, FadeOut, FadeTransform, Indicate, LaggedStart, Line,
     Rectangle, ReplacementTransform, Rotate, RoundedRectangle, Succession, Scene, SurroundingRectangle, Text, Transform, TransformFromCopy, VectorizedPoint, VGroup,
     tempconfig,
 )
 
 from ibis_anim._derive import column_text, derive
 from ibis_anim._samples import bind, generate
-from ibis_anim._scope import ScopeFrame, chains, plan, table_names
+from ibis_anim._scope import ScopeFrame, calls, chains, plan, table_names
 from ibis_anim._tracer import Step, _names, recording, trace
 
 MONO = "Consolas" if sys.platform == "win32" else "Monospace"
@@ -51,7 +50,9 @@ ZONE_TOP, ZONE_BOTTOM = 1.95, -2.05  # the stage
 DIVIDER_X = -3.95  # left of it: the trace; right of it: the stage
 STAGE_X, STAGE_W = 1.6, 10.6
 TRACE_LINES = 14
-SHELF_LINE, SHELF_Y, SHELF_LEFT, SHELF_RIGHT = -2.17, -3.28, -6.95, 6.95  # the tables in scope
+SHELF_LINE, SHELF_Y, SHELF_LEFT, SHELF_RIGHT = -2.17, -3.28, -6.95, 6.95  # the bottom row
+DAG_RIGHT, DAG_TOP, DAG_BOTTOM = -1.3, -2.45, -3.95  # the bottom row: the program graph at the left, then the tables in scope
+CARDS_LEFT = DAG_RIGHT + 0.25
 THUMB_W, THUMB_H = 2.3, 1.3
 CARD_FILL = "#1c1c1c"
 CURRENT_LINE = "#3a3a14"
@@ -546,8 +547,8 @@ def _card_slots(states: list[str]) -> list[tuple[np.ndarray, float]]:
     """Centre and width of each card on the shelf, left to right. Many cards get smaller."""
     widths = [THUMB_W * CARD_SCALE[s] for s in states]
     gap = 0.15
-    fit = min(1.0, (SHELF_RIGHT - SHELF_LEFT - gap * len(widths)) / max(sum(widths), 0.01))
-    slots, x = [], SHELF_LEFT
+    fit = min(1.0, (SHELF_RIGHT - CARDS_LEFT - gap * len(widths)) / max(sum(widths), 0.01))
+    slots, x = [], CARDS_LEFT
     for w in widths:
         slots.append((np.array([x + w * fit / 2, SHELF_Y, 0]), w * fit))
         x += w * fit + gap
@@ -578,7 +579,8 @@ class DebuggerScene(Scene):
         self.bind = bind(generate(steps, self.names, self.facts))  # sample rows for tables with a schema only
         self.columns_from = {s.output.op(): s.labels[0] for s in steps if s.op == "column"}
         self.chain_of = {i: run for run in chains(steps, self.names) for i in run}
-        self.chrome = self.caption = self.trace_panel = self.result = self.carry = self.carry_op = None
+        self.chrome = self.caption = self.trace_panel = self.dag_panel = self.result = self.carry = self.carry_op = None
+        self.program = calls(steps)
         self.chain_rows, self.next_rows = {}, {}  # the rows that a chain hands from one step to the next
         self.cards, self.rows, self.previews = {}, {}, {}
         self.code = [self._code_block(s) for s in steps]
@@ -586,8 +588,10 @@ class DebuggerScene(Scene):
         self.trace_lines = self._trace_lines()
         self.frame = VGroup(  # the parts below the top bar; the top bar has the height of the statement of each step
             Line([-7.1, SHELF_LINE, 0], [7.1, SHELF_LINE, 0], stroke_width=1, color=GREY_D),
+            Line([DAG_RIGHT + 0.12, SHELF_LINE, 0], [DAG_RIGHT + 0.12, -4.0, 0], stroke_width=1, color=GREY_D),
+            Text("PROGRAM", font=SANS, font_size=13, weight=BOLD, color=GREY_B).move_to([SHELF_LEFT + 0.35, SHELF_LINE - 0.15, 0]),
             Text("TABLES IN SCOPE", font=SANS, font_size=13, weight=BOLD, color=GREY_B)
-            .move_to([SHELF_LEFT + 0.75, SHELF_LINE - 0.15, 0]),
+            .move_to([CARDS_LEFT + 0.75, SHELF_LINE - 0.15, 0]),
         )
         super().__init__(**kwargs)
 
@@ -607,38 +611,89 @@ class DebuggerScene(Scene):
         self.wait(2)
 
     def _overview(self):
-        title = Text(f"Tracing {self.title}", font=SANS, font_size=40, weight=BOLD).to_edge(UP)
-        lines = [f"{i:>2}  {'  ' * (len(s.stack) - 1)}{s.function} › {s.op}" for i, s in enumerate(self.steps, 1)]
-        listing = Text("\n".join(lines) or "no ibis operations", font=MONO, font_size=22, line_spacing=0.8)
-        listing.next_to(title, DOWN, buff=0.5)
-        if listing.height > 6:
-            listing.scale_to_fit_height(6)
-        self.play(FadeIn(title), FadeIn(listing, shift=UP * 0.2))
-        self.wait(2)
-        self.play(FadeOut(title), FadeOut(listing))
+        title = Text(f"Tracing {self.title}", font=SANS, font_size=40, weight=BOLD)
+        self.play(FadeIn(title), *[FadeIn(Text("no ibis operations", font=MONO, font_size=22).next_to(title, DOWN))][:not self.steps])
+        self.wait(1.5)
+        self.play(*[FadeOut(m) for m in self.mobjects])
+
+    def _dag(self, i: int) -> VGroup:
+        """The program graph, bottom left: source tables → calls → the tables that each call hands on → the calls
+        that read them → the result. The call of step i is lit, with the names of the tables on its arrows in; the
+        calls that ran are green."""
+        program = self.program
+        now = next(k for k, call in enumerate(program) if i in call.steps)
+        maker, column = {}, {}  # table op → the call that hands it on; node → its column
+        for k, call in enumerate(program):  # a call is one column to the right of each call that it reads from
+            column["call", k] = 1 + max((column["call", maker[op]] for op in call.reads if op in maker), default=0)
+            maker.update({op: k for op in call.hands})
+        state = lambda k: "now" if k == now else "done" if k < now else "next"  # noqa: E731
+        nodes, edges = {}, []  # node → (column, text, kind, state); (from, to, table name, state)
+        for k, call in enumerate(program):  # in the order that they ran: a source is one column left of its first reader
+            for op in call.reads:
+                if op in maker:
+                    edges.append((("call", maker[op]), ("call", k), self.names.get(op, "table"), state(k)))
+                else:
+                    readers = [column["call", j] for j, c in enumerate(program) if op in c.reads]
+                    nodes.setdefault(("table", op), (min(readers) - 1, self.names.get(op, "table"), "source", "done"))
+                    edges.append((("table", op), ("call", k), None, state(k)))
+            nodes["call", k] = (column["call", k], call.name, "call", state(k))
+            for op in call.hands:
+                if not any(op in c.reads for c in program[k + 1:]):  # a result that no call reads
+                    nodes["out", op] = (column["call", k] + 1, self.names.get(op, "table"), "result", state(k))
+                    edges.append((("call", k), ("out", op), None, state(k)))
+        boxes = {}
+        for key, (_, name, kind, st) in nodes.items():
+            lines = [line.replace("_ ", "_") for line in textwrap.wrap(name.replace("_", "_ "), 14)] or [name]  # wrap at _
+            color = {"source": GREY_A, "result": GREEN if st == "done" else GREY_C}.get(kind) or \
+                {"now": YELLOW_A, "done": WHITE, "next": GREY_C}[st]
+            text = Text("\n".join(lines), font=MONO, font_size=20, weight=BOLD if kind == "call" else NORMAL, color=color,
+                        line_spacing=0.6)
+            box = RoundedRectangle(corner_radius=0.08, width=text.width + 0.3, height=text.height + 0.24, stroke_width=2.5,
+                                   stroke_color={"now": YELLOW, "done": GREEN, "next": GREY_D}[st] if kind == "call" else BLACK)
+            box.set_fill(CURRENT_LINE if kind == "call" and st == "now" else CARD_FILL if kind == "call" else BLACK, 1)
+            boxes[key] = VGroup(box, text.move_to(box))
+        labels = [Text(name, font=MONO, font_size=17, color=GREEN) if name else None for _, _, name, _ in edges]
+        x = 0.0
+        for c in sorted({c for c, *_ in nodes.values()}):  # columns side by side; the nodes of a column on top of each other
+            group = VGroup(*[boxes[k] for k, (col, *_) in nodes.items() if col == c]).arrange(DOWN, buff=0.3)
+            group.move_to([x + group.width / 2, 0, 0])
+            gap = [t.width for (a, *_), t in zip(edges, labels) if t is not None and nodes[a][0] == c]  # room for the table names
+            x += group.width + max([0.5, *gap]) + 0.35  # the same for each step: the graph does not move
+        arrows = VGroup()
+        for (a, b, _, st), text in zip(edges, labels):
+            start, end = boxes[a].get_right(), boxes[b].get_left()
+            color, width = {"now": (YELLOW, 4), "done": (GREY_B, 2.5), "next": (GREY_D, 2.5)}[st]
+            if nodes[b][0] - nodes[a][0] > 1:  # ponytail: an edge that skips a column bows away from it; it can still touch a tall column
+                up = start[1] >= 0
+                arrow = CurvedArrow(start + RIGHT * 0.06, end + LEFT * 0.06, angle=-PI / 3 if up else PI / 3, stroke_width=width,
+                                    color=color, tip_length=0.2)
+            else:
+                arrow, up = Arrow(start, end, buff=0.06, stroke_width=width, color=color, max_tip_length_to_length_ratio=0.15), True
+            arrows.add(arrow)
+            if text is not None and st == "now":  # the tables that the current call reads, on its arrows in
+                text.add_background_rectangle(color=BLACK, opacity=0.85, buff=0.04)
+                arrows.add(text.move_to(arrow.point_from_proportion(0.5) + (UP if up else DOWN) * 0.22))
+        graph = VGroup(arrows, *boxes.values())  # the boxes on top of the arrows
+        width, height = DAG_RIGHT - SHELF_LEFT - 0.1, DAG_TOP - DAG_BOTTOM
+        graph.scale(min(0.75, width / graph.width, height / graph.height))
+        return graph.move_to([(SHELF_LEFT + DAG_RIGHT) / 2, (DAG_TOP + DAG_BOTTOM) / 2, 0])
 
     # -- the debugger frame ------------------------------------------------------------------
 
-    def _calls(self, i: int) -> tuple[str, ...]:
-        step = self.steps[i]
-        calls = tuple(f"{f.name}()" for f in step.stack if f.name != "<module>")
-        return calls or (os.path.basename(step.stack[-1].filename) if step.stack else "?",)  # module-level code: the script
-
     def _trace_lines(self) -> list[tuple[str, int, str, int]]:
-        """(kind, step, text, depth): a line per function call with the tables that it reads, a line per step under
-        it, and a "return" line with the table that the call hands on to a later step."""
-        lines, last_read = [], {t.op(): i for i, s in enumerate(self.steps) for t in s.inputs}
-        for calls, group in itertools.groupby(range(len(self.steps)), key=self._calls):
-            run, depth, function = list(group), len(calls) - 1, calls[-1].endswith("()")
-            made = {self.steps[i].output.op() for i in run}
-            reads = dict.fromkeys(self.names.get(t.op(), "table") for i in run for t in self.steps[i].inputs if t.op() not in made)
-            call = f"{calls[-1][:-2]}({', '.join(reads)})" if function else calls[-1]
-            chars = int((DIVIDER_X - 0.4 - SHELF_LEFT - depth * 0.18) / _char_width(13))  # a long call wraps after a comma
-            lines += [("call", run[0], part, depth + (k > 0)) for k, part in enumerate(textwrap.wrap(call, chars) or [call])]
-            lines += [("step", i, f"{i + 1:>2} {self.steps[i].op}", depth) for i in run]
-            out = self.steps[run[-1]].output.op()  # ponytail: the last table of the call stands for its return value
-            if function and (last_read.get(out, -1) > run[-1] or run[-1] == len(self.steps) - 1):
-                lines.append(("return", run[-1], f"→ {self.names.get(out, 'table')}", depth))
+        """(kind, step, text, depth): a line per call with the tables that it reads, a line per step under it, and a
+        "return" line per table that the call hands on, with the calls that read it (`→ stg_stores to usa_stores()`)."""
+        lines, program = [], self.program
+        for k, call in enumerate(program):
+            chars = int((DIVIDER_X - 0.4 - SHELF_LEFT - call.depth * 0.18) / _char_width(13))  # a long line wraps after a space
+            reads = ", ".join(self.names.get(op, "table") for op in call.reads)
+            head = f"{call.name[:-2]}({reads})" if call.name.endswith("()") else call.name
+            lines += [("call", call.steps[0], part, call.depth + (n > 0)) for n, part in enumerate(textwrap.wrap(head, chars) or [head])]
+            lines += [("step", i, f"{i + 1:>2} {self.steps[i].op}", call.depth) for i in call.steps]
+            for op in call.hands:
+                users = ", ".join(dict.fromkeys(c.name for c in program[k + 1:] if op in c.reads))
+                text = f"→ {self.names.get(op, 'table')}" + (f" to {users}" if users else "")
+                lines += [("return", call.steps[-1], part, call.depth + (n > 0)) for n, part in enumerate(textwrap.wrap(text, chars - 2))]
         return lines
 
     def _trace(self, i: int) -> VGroup:
@@ -758,8 +813,10 @@ class DebuggerScene(Scene):
             f = min(1.0, (self.zone_top - ZONE_BOTTOM) / (old_top - ZONE_BOTTOM))
             anims.append(self.carry.animate.scale(f, about_point=self.carry.get_corner(UL)).shift(UP * (self.zone_top - old_top)))
         anims.append(FadeTransform(self.trace_panel, trace) if self.trace_panel else FadeIn(trace))
+        dag = self._dag(i)
+        anims.append(FadeTransform(self.dag_panel, dag) if self.dag_panel else FadeIn(dag))
         self.play(*anims, run_time=0.6)
-        self.chrome, self.trace_panel = chrome, trace
+        self.chrome, self.trace_panel, self.dag_panel = chrome, trace, dag
 
     def _card(self, key) -> Card:
         if key not in self.rows:
@@ -926,7 +983,8 @@ class DebuggerScene(Scene):
         self._settle()
 
     def _persistent(self) -> list:
-        return [m for m in (self.frame, self.trace_panel, self.chrome, self.caption, self.carry, *self.cards.values()) if m is not None]
+        return [m for m in (self.frame, self.trace_panel, self.dag_panel, self.chrome, self.caption, self.carry, *self.cards.values())
+                if m is not None]
 
     # -- helpers -----------------------------------------------------------------------------
 

@@ -24,6 +24,20 @@ def test_a_model_runs_with_the_models_upstream_of_it():
     assert all(v.isdigit() for v in stores["store_id"].to_pylist())  # text that the model casts to int
 
 
+def test_each_model_hands_its_table_to_the_models_that_read_it():
+    from ibis_anim._scope import calls
+
+    _, steps = ibis_anim.trace(ibis_anim.load_dbt_model(PROJECT / "models" / "marts" / "store_revenue.py"))
+    names = table_names(steps)
+    flow = [(c.name, [names[op] for op in c.reads], [names[op] for op in c.hands]) for c in calls(steps)]
+    assert flow == [
+        ("stg_orders()", ["orders"], ["stg_orders"]),
+        ("stg_stores()", ["stores"], ["stg_stores"]),
+        ("usa_stores()", ["stg_stores"], ["usa_stores"]),  # the table of stg_stores() is the argument of usa_stores()
+        ("store_revenue()", ["stg_orders", "usa_stores", "customers"], ["store_revenue"]),
+    ]
+
+
 def test_the_command_line_finds_the_function():
     import sys
 
@@ -41,5 +55,6 @@ def test_the_command_line_finds_the_function():
 
 if __name__ == "__main__":
     test_a_model_runs_with_the_models_upstream_of_it()
+    test_each_model_hands_its_table_to_the_models_that_read_it()
     test_the_command_line_finds_the_function()
     print("ok")
