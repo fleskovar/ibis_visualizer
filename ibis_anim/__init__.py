@@ -57,13 +57,13 @@ class _SubmoduleAlias(importlib.abc.MetaPathFinder, importlib.abc.Loader):
         module.__spec__ = module.__spec__.loader_state  # the import system replaced the spec of the real module
 
 
-def _render_at_exit(steps: list[Step]):
+def _render_at_exit(steps: list[Step], name: str | None = None):
     if steps and os.environ.get("IBIS_ANIM", "1") != "0":
         names = table_names(steps)
         for line in _derive.report(steps, _derive.derive(steps, names), names).splitlines():
             if "⚠" in line:
                 print(f"ibis_anim: {line.strip()}")
-        print(f"ibis_anim: video at {render(steps, Path(sys.argv[0]).stem or 'ibis_anim')}")
+        print(f"ibis_anim: video at {render(steps, name or Path(sys.argv[0]).stem or 'ibis_anim')}")
 
 
 sys.meta_path.insert(0, _SubmoduleAlias())

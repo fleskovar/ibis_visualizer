@@ -10,7 +10,15 @@ from ibis_anim import _           # was: from ibis import _
 import ibis_anim.selectors as s   # was: import ibis.selectors as s
 ```
 
-The script runs as before. At exit, the video goes to `media/<script>.mp4`. There is also one clip per step in `media/videos/<resolution>/sections/`.
+The script runs as before. At exit, the video goes to `media/<script>.mp4`.
+
+To keep the code unchanged (`import ibis`), run it through `ibis_anim` instead:
+
+```sh
+python -m ibis_anim my_script.py [ARGS...]         # the whole script; the video is media/my_script.mp4
+python -m ibis_anim my_script.py:pipeline          # one function, called without arguments; media/pipeline.mp4
+python -m ibis_anim models/marts/store_revenue.py  # a dbt-ibis model and the models upstream of it
+``` There is also one clip per step in `media/videos/<resolution>/sections/`.
 
 The videos are 1080p at 30 frames per second. For faster renders, set `IBIS_ANIM_QUALITY=medium` (720p) or `low` (480p), or pass `quality=` to `ibis_anim.render`. A 1080p render takes about 2.5 times as long as a 480p render.
 
@@ -114,12 +122,13 @@ The generated rows illustrate the steps only. The facts do not come from them. S
 
 ## dbt-ibis models
 
-ibis_anim runs a [dbt-ibis](https://github.com/binste/dbt-ibis) model together with every model upstream of it. Pass the `model` function, which has `@depends_on(...)`, without arguments:
+ibis_anim runs a [dbt-ibis](https://github.com/binste/dbt-ibis) model together with every model upstream of it. Give the file of the model:
 
-```python
-model = ibis_anim.load_dbt_model("models/marts/store_revenue.py")  # or .ibis
-ibis_anim.visualize(model)
+```sh
+python -m ibis_anim models/marts/store_revenue.py  # or .ibis; the video is media/store_revenue.mp4
 ```
+
+From Python, pass the `model` function, which has `@depends_on(...)`, without arguments: `ibis_anim.visualize(ibis_anim.load_dbt_model("models/marts/store_revenue.py"))`.
 
 - The project is the nearest folder above the model file that has `dbt_project.yml`. Its model folders hold the models: `name.py` or `name.ibis` for ibis models, `name.sql` for SQL models.
 - Each `ref("name")` to an ibis model runs that model first, with its own references. The steps of each model show under its own name in the trace (`stg_stores()`, not `model()`).
@@ -127,7 +136,7 @@ ibis_anim.visualize(model)
 - The dbt tests of the columns in the YAML (`unique`, `not_null`, `accepted_values`, and the constraints `primary_key` and `not_null`) are facts about the table. dbt checks them at each build. This also applies to ibis models: a test on `stg_stores.store_id` keeps the column unique after a cast.
 - Not yet: `relationships` tests, and SQL models with `SELECT *` and no columns in the YAML.
 
-See `examples/dbt_shop/` and `examples/dbt_shop_video.py`. Install the extra with `pip install ibis-anim[dbt]`.
+See `examples/dbt_shop/`. Install the extra with `pip install ibis-anim[dbt]`.
 
 ## Use
 
@@ -139,7 +148,7 @@ python examples/table_ops.py         # union, distinct, fill_null, cast, new col
 python examples/customer_health.py   # a realistic job: 5 tables, chains, a loop, a branch, 2 left joins, a rank (22 steps)
 python examples/conditions.py        # ibis.and_ and ibis.or_ in filters, ibis.ifelse in new columns
 python examples/schema_only.py       # schemas only, no data: the video uses generated rows
-python examples/dbt_shop_video.py    # a dbt-ibis model and the models upstream of it
+python -m ibis_anim examples/dbt_shop/models/marts/store_revenue.py  # a dbt-ibis model and the models upstream of it
 IBIS_ANIM=0 python my_script.py      # run without the video
 python tests/test_tracer.py          # checks of the tracer
 python tests/test_scope.py           # checks of the tables panel plan
