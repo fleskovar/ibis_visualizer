@@ -47,17 +47,25 @@ def generate(steps, names: dict, facts: dict) -> dict:
     by_name = {names.get(op, getattr(op, "name", "")): op for op in tables} | {op.name: op for op in tables}
     origin = lambda text: (by_name.get(text.rsplit(".", 1)[0]), text.rsplit(".", 1)[1]) if "." in text else (None, None)  # noqa: E731
 
-    def source_columns(table_op, column) -> set:
-        """The source columns whose values a column of a traced table carries (from the lineage of the facts)."""
+    def source_columns(table_op, column, depth: int = 0) -> set:
+        """The source columns whose values a column of a traced table carries: from the lineage of the facts,
+        and through projections of the column or of a cast of it (`store_id.cast("int")` keeps its values)."""
         if table_op in tables:
             return {(table_op, column)}
         col = facts.get(table_op).column(column) if table_op in facts else None
         found = {origin(o) for o in (col.equal_to | col.subset_of)} if col else set()
+        value = getattr(table_op, "values", {}).get(column)
+        value = value.arg if isinstance(value, ops.Cast) else value
+        if isinstance(value, ops.Field) and value.rel is not table_op and depth < 30:
+            found |= source_columns(value.rel, value.name, depth + 1)
         return {(t, c) for t, c in found if t is not None}
 
-    hints, links = {}, []
+    hints, links, numeric_text = {}, [], set()
     for step in steps:
         for node in _own_values(step.output.op()):
+            for cast in node.find(ops.Cast, filter=ops.Value):  # text that the code casts to a number must look like one
+                if isinstance(cast.arg, ops.Field) and (cast.to.is_integer() or cast.to.is_floating() or cast.to.is_decimal()):
+                    numeric_text |= source_columns(cast.arg.rel, cast.arg.name)
             for cmp in node.find(COMPARISONS, filter=ops.Value):
                 field, literal = _field_and_literal(cmp)
                 if field is not None:
@@ -84,6 +92,8 @@ def generate(steps, names: dict, facts: dict) -> dict:
         columns = {}
         for name, dtype in table.schema.items():
             ref = refs.get(name)
+            as_text = dtype.is_string() and (table, name) in numeric_text
+            dtype = ibis.dtype("int64") if as_text else dtype  # generate numbers, then write them as text
             if ref is not None and (ref[0], ref[1]) in done:  # a foreign key takes the values that it references
                 parent = done[ref[0], ref[1]]
                 columns[name] = [parent[(i * 2) % len(parent)] for i in range(ROWS)]
@@ -92,6 +102,8 @@ def generate(steps, names: dict, facts: dict) -> dict:
                 columns[name] = _linked(dtype, group.index((table, name)), name in unique)
             else:
                 columns[name] = _column(dtype, name in unique, values.get(name), hints.get((table, name), []))
+            if as_text:
+                columns[name] = [None if v is None else str(v) for v in columns[name]]
             done[table, name] = columns[name]
         data[table] = pa.Table.from_pydict(columns, schema=ibis.schema(table.schema).to_pyarrow())
     return data

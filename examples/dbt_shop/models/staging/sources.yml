@@ -1,0 +1,56 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: main
+    tables:
+      - name: stores
+        columns:
+          - name: store_id
+            data_type: varchar
+            data_tests: [unique, not_null]
+          - name: store_name
+            data_type: varchar
+          - name: country
+            data_type: varchar
+      - name: orders
+        columns:
+          - name: order_id
+            data_type: bigint
+            data_tests: [unique, not_null]
+          - name: store_id
+            data_type: varchar
+          - name: customer_id
+            data_type: bigint
+          - name: amount
+            data_type: double
+          - name: status
+            data_type: varchar
+            data_tests:
+              - accepted_values:
+                  values: [shipped, returned, cancelled]
+      - name: customers
+        columns:
+          - name: customer_id
+            data_type: bigint
+            data_tests: [unique, not_null]
+          - name: full_name
+            data_type: varchar
+          - name: country
+            data_type: varchar
+
+models:
+  - name: stg_customers  # a SQL model: dbt-ibis needs the types of its columns
+    columns:
+      - name: customer_id
+        data_type: bigint
+        data_tests: [unique, not_null]
+      - name: full_name
+        data_type: varchar
+      - name: customer_country
+        data_type: varchar
+
+  - name: stg_stores  # an ibis model: no types needed, but its tests are facts about it
+    columns:
+      - name: store_id
+        data_tests: [unique, not_null]

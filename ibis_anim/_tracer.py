@@ -71,8 +71,16 @@ def recording(steps: list[Step] | None):
 
 
 def trace(func, *args, **kwargs) -> tuple[object, list[Step]]:
-    """Call `func` and return its result with the ibis steps that it performed."""
+    """Call `func` and return its result with the ibis steps that it performed.
+
+    A dbt-ibis model (`@depends_on(...)`) called without arguments gets its inputs from its project:
+    the models upstream of it run first, under the same recording.
+    """
     with recording([]) as steps:
+        if not args and not kwargs and getattr(func, "depends_on", None) is not None:
+            from ibis_anim._dbt import run
+
+            return run(func), steps
         return func(*args, **kwargs), steps
 
 

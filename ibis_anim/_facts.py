@@ -50,17 +50,19 @@ class TableFacts:
 _declared: dict = {}  # table op → (keys, values, not_null, references)
 
 
-def declare(table, key=None, values=None, not_null=(), references=None):
+def declare(table, key=None, values=None, not_null=(), references=None, unique=()):
     """State what is known about a source table, for example:
 
     declare(orders, key="order_id", values={"status": {"paid", "refunded"}, "amount": (0, None)},
             not_null=["order_id"], references={"customer_id": customers.customer_id})
 
     `values` maps a column to a set of values or to a (low, high) range, where None is unbounded.
+    `unique` lists columns that are unique each on its own (a key of one column each).
     Declare only constraints that hold for any data (an enum type, a CHECK constraint, a business
     rule), never values read from a sample: the facts must not depend on the data.
     """
     keys = [frozenset([key] if isinstance(key, str) else key)] if key else []
+    keys += [frozenset({c}) for c in unique if frozenset({c}) not in keys]
     sets = {name: _as_values(spec) for name, spec in (values or {}).items()}
     refs = {name: (column.op().rel, column.get_name()) for name, column in (references or {}).items()}
     _declared[table.op()] = (keys, sets, set(not_null) | {c for k in keys for c in k}, refs)
@@ -72,6 +74,19 @@ def _as_values(spec) -> P.Interval:
         low, high = spec
         return P.closed(-P.inf if low is None else low, P.inf if high is None else high)
     return P.Interval(*(P.singleton(v) for v in spec))
+
+
+def with_declared(facts: TableFacts, op) -> TableFacts:
+    """Add what is declared about a table that a step made (for example the tests of a dbt model)."""
+    if op not in _declared:
+        return facts
+    keys, sets, not_null, _ = _declared[op]
+    for name in facts.columns:
+        col = facts.columns[name]
+        values = safe(lambda: col.values & sets[name], col.values) if name in sets else col.values
+        facts.columns[name] = replace(col, values=values, nulls=NEVER if name in not_null else col.nulls)
+    facts.keys += [k for k in keys if k not in facts.keys and k <= set(facts.columns)]
+    return facts
 
 
 def source_facts(table, name: str, names: dict) -> TableFacts:

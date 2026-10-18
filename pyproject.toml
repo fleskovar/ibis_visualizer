@@ -4,7 +4,10 @@ version = "0.1.0"
 description = "Drop-in ibis replacement: a visual debugger for ibis data transformations, rendered with manim"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["ibis-framework[duckdb]>=10", "manim>=0.19", "portion>=2.4"]
+dependencies = ["ibis-framework[duckdb]>=10", "manim>=0.19", "portion>=2.4", "pyyaml>=6"]
+
+[project.optional-dependencies]
+dbt = ["dbt-ibis>=0.11"]  # for projects with dbt-ibis models
 
 [build-system]
 requires = ["setuptools>=69"]

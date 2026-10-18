@@ -10,6 +10,7 @@ import functools
 import linecache
 import os
 import re
+import shutil
 import sys
 import textwrap
 from dataclasses import dataclass, field, replace
@@ -66,18 +67,30 @@ def visualize(func, *args, **kwargs) -> Path:
     return render(steps, func.__name__)
 
 
-def render(steps: list[Step], name: str, output_dir="media", quality="low_quality") -> Path:
-    """Render one video with one section per step, and return the path of the video."""
-    config = {"quality": quality, "media_dir": str(output_dir), "save_sections": True,
-              "output_file": name, "verbosity": "WARNING", "progress_bar": "none"}
+QUALITIES = {"low": (854, 480, 15), "medium": (1280, 720, 30), "high": (1920, 1080, 30)}  # width, height, frames per second
+
+
+def render(steps: list[Step], name: str, output_dir="media", quality: str | None = None) -> Path:
+    """Render one video with one section per step. The video goes to `<output_dir>/<name>.mp4`.
+
+    `quality` is low (480p), medium (720p) or high (1080p, the default), or the IBIS_ANIM_QUALITY variable.
+    """
+    width, height, fps = QUALITIES[quality or os.environ.get("IBIS_ANIM_QUALITY", "high")]
+    config = {"pixel_width": width, "pixel_height": height, "frame_rate": fps, "media_dir": str(output_dir),
+              "save_sections": True, "output_file": name, "verbosity": "WARNING", "progress_bar": "none",
+              "text_dir": str(Path(output_dir) / "texts" / name)}  # a text cache per video: renders side by side do not race
+    # manim keeps partial files in a folder named after the scene class: one class per video, so that renders can run side by side
+    scene_class = type(re.sub(r"\W", "_", name) or "Video", (DebuggerScene,), {})
     with recording(None), tempconfig(config):  # the previews run ibis methods: do not record them
-        scene = DebuggerScene(steps, title=name)
+        scene = scene_class(steps, title=name)
         clips = Path(scene.renderer.file_writer.sections_output_dir)
         for old in clips.glob(f"{name}_*.mp4"):  # manim keeps the clips of earlier renders: only this render's clips stay
             if re.fullmatch(rf"{re.escape(name)}_\d{{4}}_.*\.mp4", old.name):
                 old.unlink()
         scene.render()
-        return Path(scene.renderer.file_writer.movie_file_path)
+        video = Path(output_dir) / f"{name}.mp4"  # the video itself, at the top of the folder, easy to find
+        shutil.copyfile(scene.renderer.file_writer.movie_file_path, video)
+        return video
 
 
 # ---------------------------------------------------------------------------------------------
@@ -455,11 +468,13 @@ class Card(VGroup):
         title.move_to(self.box.get_corner(UL) + [0.1 + title.width / 2, -0.17, 0])
         shape.move_to(self.box.get_corner(UR) + [-0.1 - shape.width / 2, -0.17, 0])
         columns = table.columns[:4]
+        more = len(table.columns) - len(columns)
+        footer = " · ".join(t for t in (note, f"key: {key}" if key else "", f"+{more} more columns" if more else "") if t)
         cw, rh = (THUMB_W - 0.16) / max(len(columns), 1), 0.22
         top_left = self.box.get_corner(UL) + [0.08, -0.36, 0]
         mini = VGroup()
         for j, name_ in enumerate(columns):
-            for r in range(-1, min(3, len(preview))):
+            for r in range(-1, min(2 if footer else 3, len(preview))):  # the footer needs the room of one row
                 text = name_ if r < 0 else _fmt(preview[r].get(name_))
                 cell = Rectangle(width=cw, height=rh, stroke_width=0.6, stroke_color=GREY_D)
                 cell.set_fill(NEUTRAL if r < 0 else CARD_FILL, 1)
@@ -467,9 +482,7 @@ class Card(VGroup):
                 label.scale(min(1, (cw - 0.05) / label.width, rh * 0.75 / label.height))
                 cell.move_to(top_left + [(j + 0.5) * cw, -(r + 1.5) * rh, 0])
                 mini.add(VGroup(cell, label.move_to(cell)))
-        more = len(table.columns) - len(columns)
         self.add(self.box, title, shape, mini)
-        footer = " · ".join(t for t in (note, f"key: {key}" if key else "", f"+{more} more columns" if more else "") if t)
         if footer:
             line = Text(footer, font=SANS, font_size=11, color=FACTS_TEXT if key else GREY_B)
             if line.width > THUMB_W - 0.16:

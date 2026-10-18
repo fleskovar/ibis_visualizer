@@ -22,7 +22,7 @@ from sqlglot.optimizer import optimize
 from sqlglot.optimizer.normalize import normalize
 from sqlglot.optimizer.qualify import qualify
 
-from ibis_anim._facts import ALWAYS, ANY, MAYBE, NEVER, Column, TableFacts, arithmetic, describe, hull, safe, source_facts
+from ibis_anim._facts import ALWAYS, ANY, MAYBE, NEVER, Column, TableFacts, arithmetic, describe, hull, safe, source_facts, with_declared
 
 NO_VALUE = object()
 COMPARE = {exp.EQ: "=", exp.NEQ: "!=", exp.GT: ">", exp.GTE: ">=", exp.LT: "<", exp.LTE: "<="}
@@ -47,7 +47,8 @@ def derive(steps, names: dict) -> dict:
                 ranks.update({f"{name}.{c}": i for c in columns if f"{name}.{c}" not in ranks})
                 columns = {c: replace(f, equal_to=f.equal_to | {f"{name}.{c}"}) for c, f in columns.items()}
             ins.append(TableFacts(columns, facts[op].keys))
-        facts[step.output.op()] = _step(step, frontier, ins, [names.get(op, "table") for op in frontier])
+        out = _step(step, frontier, ins, [names.get(op, "table") for op in frontier])
+        facts[step.output.op()] = with_declared(out, step.output.op())  # e.g. the tests of a dbt model
         facts[step.output.op()].ranks = ranks
     return facts
 

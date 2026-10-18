@@ -16,12 +16,13 @@ import ibis
 from ibis import *  # noqa: F403
 
 from ibis_anim import _derive, _tracer
+from ibis_anim._dbt import load_model as load_dbt_model
 from ibis_anim._facts import declare
 from ibis_anim._scope import table_names
 from ibis_anim._scene import render, visualize
 from ibis_anim._tracer import Step, install, recording, trace
 
-__all__ = [*ibis.__all__, "Step", "declare", "recording", "render", "report", "trace", "visualize"]
+__all__ = [*ibis.__all__, "Step", "declare", "load_dbt_model", "recording", "render", "report", "trace", "visualize"]
 
 
 def report(func, *args, **kwargs) -> str:
