@@ -25,6 +25,7 @@ from ibis.backends.sql.datatypes import DuckDBType
 from sqlglot import exp
 
 from ibis_anim._facts import declare
+from ibis_anim._scope import name_table
 
 MODEL_SUFFIXES = (".ibis", ".py")
 
@@ -37,7 +38,7 @@ def run(func):
     """Call a dbt-ibis model with its inputs; the models upstream of it run first."""
     project = Project.of(func)
     name = project.name(func)
-    return project._declare(("ref", name), project.call(func))  # the tests of the model itself
+    return name_table(project._declare(("ref", name), project.call(func)), name)  # the tests of the model itself
 
 
 def load_model(path, name: str | None = None):
@@ -150,7 +151,7 @@ class Project:
         if ("ref", name) not in self.tables:
             path = self.files.get(name)
             if path is not None and path.suffix in MODEL_SUFFIXES:  # an ibis model: run it, with its own inputs first
-                self.tables[("ref", name)] = self._declare(("ref", name), self.call(load_model(path, name)))
+                self.tables[("ref", name)] = name_table(self._declare(("ref", name), self.call(load_model(path, name))), name)
             else:  # a SQL model or a seed
                 self.tables[("ref", name)] = self._schema_table(("ref", name), name, path)
         return self.tables[("ref", name)]

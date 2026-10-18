@@ -228,7 +228,7 @@ def _names(obj, table: ir.Table) -> list[str]:
 def _user_frames() -> list:
     frames, f = [], sys._getframe(1)
     while f is not None and f.f_code is not trace.__code__:
-        if not os.path.normcase(f.f_code.co_filename).startswith(_LIBRARY_DIRS):
+        if not os.path.normcase(f.f_code.co_filename).startswith((*_LIBRARY_DIRS, "<frozen ")):  # e.g. <frozen runpy>, for `python -m`
             frames.append(f)
         f = f.f_back
     return frames[::-1]

@@ -16,6 +16,13 @@ def chained(a, b):
     return a.filter(_.x > 1).join(b, "x").mutate(w=_.x * 3)  # one statement, three steps
 
 
+def spread(a):
+    return (
+        a.filter(_.x > 0)
+        .mutate(y=_.x)
+    )
+
+
 def test_plan_rebinds_and_expires_tables():
     a = ibis_anim.memtable({"x": [1, -1, 2]})
     b = ibis_anim.memtable({"x": [1, 2], "z": [3, 4]})
@@ -37,7 +44,28 @@ def test_chains_group_one_statement():
     assert chains(steps, table_names(steps)) == [[0, 1, 2], [3], [4], [5], [6]]
 
 
+def test_unnamed_results_are_named_after_their_operations():
+    a = ibis_anim.memtable({"x": [1, -1, 2]})
+    b = ibis_anim.memtable({"x": [1, 2], "z": [3, 4]})
+    steps = ibis_anim.trace(chained, a, b)[1]
+    names = [table_names(steps)[s.output.op()] for s in steps]
+    assert names == ["filtered a", "filtered a × b", "filtered a × b with w"]  # never identifiers: chains stay chains
+
+
+def test_the_code_bar_shows_the_whole_statement():
+    from ibis_anim._scene import _code_lines
+
+    steps = ibis_anim.trace(spread, ibis_anim.memtable({"x": [1, -1, 2]}))[1]
+    lines = _code_lines(__file__, steps[1].stack[-1].lineno, 40)  # the mutate, on the third line of the statement
+    assert [(text, now) for _, text, now in lines] == [
+        ("return (", False), ("    a.filter(_.x > 0)", False), ("    .mutate(y=_.x)", True), (")", False)]
+    narrow = _code_lines(__file__, steps[1].stack[-1].lineno, 12)
+    assert all(len(text) <= 12 for _, text, _ in narrow) and any(now for *_, now in narrow)
+
+
 if __name__ == "__main__":
     test_plan_rebinds_and_expires_tables()
     test_chains_group_one_statement()
+    test_unnamed_results_are_named_after_their_operations()
+    test_the_code_bar_shows_the_whole_statement()
     print("ok")

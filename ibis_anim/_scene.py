@@ -6,8 +6,11 @@ rows on the screen. Each kind of operation has its own choreography, in phases w
 
 from __future__ import annotations
 
+import ast
 import functools
+import itertools
 import linecache
+import math
 import os
 import re
 import shutil
@@ -41,8 +44,8 @@ MAX_RESULT_ROWS = 8
 ROW_H = 0.4
 FACTS_H = 0.5
 META_GAP = 0.14  # space between the metadata rows (facts, types) and the table itself
-BAR_BOTTOM = 3.08  # top bar: step, call path and the current statement
-CODE_Y = 3.3
+BAR_BOTTOM = 3.08  # top bar: step, call path and the current statement (one line; each more line moves the rest down)
+CODE_Y, CODE_LINE_H, MAX_CODE_LINES = 3.3, 0.27, 6
 STRIP_Y, CAPTION_Y = 2.72, 2.32  # the pipeline of the statement, then the caption of the phase
 ZONE_TOP, ZONE_BOTTOM = 1.95, -2.05  # the stage
 DIVIDER_X = -3.95  # left of it: the trace; right of it: the stage
@@ -222,6 +225,12 @@ def _formula(step: Step, name: str) -> str:
     return f"{name} = {_expr_text(exprs[name])}" if name in exprs else name
 
 
+def _condition(lines: list[str]) -> VGroup:
+    """The label of a filter, as the sort keys of order_by: what a row needs to stay, one line per test."""
+    head = Text("keep rows where", font=SANS, font_size=14, color=GREY_A)
+    return VGroup(head, *(Text(line, font=MONO, font_size=18, color=YELLOW) for line in lines)).arrange(DOWN, aligned_edge=LEFT, buff=0.12)
+
+
 def _call_args(code: str, verb: str) -> str:
     i = code.find(f"{verb}(")
     return code[i + len(verb) + 1:-1] if i >= 0 and code.endswith(")") else code
@@ -321,8 +330,40 @@ def _fmt(value) -> str:
 
 
 @functools.cache
-def _char_width() -> float:
-    return Text("0" * 20, font=MONO, font_size=19, weight=BOLD).width / 20
+def _char_width(size: int = 19, weight=BOLD) -> float:
+    return Text("0" * 20, font=MONO, font_size=size, weight=weight).width / 20
+
+
+@functools.cache
+def _statements(filename: str) -> list[tuple[int, int]]:
+    """(first, last) line of each statement of a file. A compound statement (def, if, for, with) counts its header only."""
+    try:
+        tree = ast.parse("".join(linecache.getlines(filename)))
+    except (SyntaxError, ValueError):
+        return []
+    spans = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.stmt):
+            body = getattr(node, "body", None)
+            last = body[0].lineno - 1 if isinstance(body, list) and body else node.end_lineno
+            spans.append((node.lineno, max(last, node.lineno)))
+    return spans
+
+
+def _code_lines(filename: str, lineno: int, width: int) -> list[tuple[str, str, bool]]:
+    """The whole statement at `lineno`, as (line number, text, current) display lines of at most `width` characters.
+
+    A long line wraps. A statement of more than MAX_CODE_LINES lines shows the lines around the current line.
+    """
+    first, last = min((s for s in _statements(filename) if s[0] <= lineno <= s[1]), key=lambda s: s[1] - s[0], default=(lineno, lineno))
+    source = textwrap.dedent("".join(linecache.getline(filename, n) for n in range(first, last + 1))).splitlines()
+    lines = []
+    for n, text in zip(range(first, last + 1), source):
+        indent = " " * (len(text) - len(text.lstrip()) + 4)
+        lines += [(str(n) if k == 0 else "", part, n == lineno) for k, part in enumerate(textwrap.wrap(text, width, subsequent_indent=indent))]
+    now = next((k for k, line in enumerate(lines) if line[2]), 0)
+    start = max(0, min(now - 1, len(lines) - MAX_CODE_LINES))
+    return lines[start:start + MAX_CODE_LINES]
 
 
 def _cell_width(samples: list[Sample], columns) -> float:
@@ -540,13 +581,11 @@ class DebuggerScene(Scene):
         self.chrome = self.caption = self.trace_panel = self.result = self.carry = self.carry_op = None
         self.chain_rows, self.next_rows = {}, {}  # the rows that a chain hands from one step to the next
         self.cards, self.rows, self.previews = {}, {}, {}
-        self.zone_top = ZONE_TOP
+        self.code = [self._code_block(s) for s in steps]
+        self._layout(0)
         self.trace_lines = self._trace_lines()
-        self.frame = VGroup(
-            Line([-7.1, BAR_BOTTOM, 0], [7.1, BAR_BOTTOM, 0], stroke_width=1, color=GREY_D),
-            Line([DIVIDER_X, BAR_BOTTOM, 0], [DIVIDER_X, SHELF_LINE, 0], stroke_width=1, color=GREY_D),
+        self.frame = VGroup(  # the parts below the top bar; the top bar has the height of the statement of each step
             Line([-7.1, SHELF_LINE, 0], [7.1, SHELF_LINE, 0], stroke_width=1, color=GREY_D),
-            Text("TRACE", font=SANS, font_size=14, weight=BOLD, color=GREY_B).move_to([SHELF_LEFT + 0.3, BAR_BOTTOM - 0.18, 0]),
             Text("TABLES IN SCOPE", font=SANS, font_size=13, weight=BOLD, color=GREY_B)
             .move_to([SHELF_LEFT + 0.75, SHELF_LINE - 0.15, 0]),
         )
@@ -580,30 +619,50 @@ class DebuggerScene(Scene):
 
     # -- the debugger frame ------------------------------------------------------------------
 
+    def _calls(self, i: int) -> tuple[str, ...]:
+        step = self.steps[i]
+        calls = tuple(f"{f.name}()" for f in step.stack if f.name != "<module>")
+        return calls or (os.path.basename(step.stack[-1].filename) if step.stack else "?",)  # module-level code: the script
+
     def _trace_lines(self) -> list[tuple[str, int, str, int]]:
-        """(kind, step, text, depth): one line per function call, and one line per step under it."""
-        lines, previous = [], None
-        for i, step in enumerate(self.steps):
-            calls = tuple(f"{f.name}()" for f in step.stack if f.name != "<module>")
-            calls = calls or (os.path.basename(step.stack[-1].filename) if step.stack else "?",)  # module-level code: the script
-            if calls != previous:
-                lines.append(("call", i, calls[-1], len(calls) - 1))
-                previous = calls
-            lines.append(("step", i, f"{i + 1:>2} {step.op}", len(calls) - 1))
+        """(kind, step, text, depth): a line per function call with the tables that it reads, a line per step under
+        it, and a "return" line with the table that the call hands on to a later step."""
+        lines, last_read = [], {t.op(): i for i, s in enumerate(self.steps) for t in s.inputs}
+        for calls, group in itertools.groupby(range(len(self.steps)), key=self._calls):
+            run, depth, function = list(group), len(calls) - 1, calls[-1].endswith("()")
+            made = {self.steps[i].output.op() for i in run}
+            reads = dict.fromkeys(self.names.get(t.op(), "table") for i in run for t in self.steps[i].inputs if t.op() not in made)
+            call = f"{calls[-1][:-2]}({', '.join(reads)})" if function else calls[-1]
+            chars = int((DIVIDER_X - 0.4 - SHELF_LEFT - depth * 0.18) / _char_width(13))  # a long call wraps after a comma
+            lines += [("call", run[0], part, depth + (k > 0)) for k, part in enumerate(textwrap.wrap(call, chars) or [call])]
+            lines += [("step", i, f"{i + 1:>2} {self.steps[i].op}", depth) for i in run]
+            out = self.steps[run[-1]].output.op()  # ponytail: the last table of the call stands for its return value
+            if function and (last_read.get(out, -1) > run[-1] or run[-1] == len(self.steps) - 1):
+                lines.append(("return", run[-1], f"→ {self.names.get(out, 'table')}", depth))
         return lines
 
     def _trace(self, i: int) -> VGroup:
         """The trace around step i: the steps that ran, the current step, and the steps to come."""
         current = next(k for k, (kind, s, _, _) in enumerate(self.trace_lines) if kind == "step" and s == i)
-        start = max(0, min(current - 5, len(self.trace_lines) - TRACE_LINES))
+        start = max(0, min(current - 5, len(self.trace_lines) - self.trace_rows))
         panel = VGroup()
-        for k, (kind, s, text, depth) in enumerate(self.trace_lines[start:start + TRACE_LINES]):
-            y = BAR_BOTTOM - 0.48 - k * 0.33
+
+        def fit(line):
+            if line.get_right()[0] > DIVIDER_X - 0.1:
+                line.scale_to_fit_width(DIVIDER_X - 0.1 - line.get_left()[0], about_edge=LEFT)
+            return line
+
+        for k, (kind, s, text, depth) in enumerate(self.trace_lines[start:start + self.trace_rows]):
+            y = self.bar_bottom - 0.48 - k * 0.33
             indent = SHELF_LEFT + 0.12 + depth * 0.18
             if kind == "call":
                 inside = s <= i and all(not (kk == "call" and i >= ss > s) for kk, ss, _, _ in self.trace_lines)
                 line = Text(text, font=MONO, font_size=13, weight=BOLD, color=WHITE if inside else GREY_C)
-                panel.add(line.move_to([indent + line.width / 2, y, 0]))
+                panel.add(fit(line.move_to([indent + line.width / 2, y, 0])))
+                continue
+            if kind == "return":  # green once the table left the call
+                line = Text(text, font=MONO, font_size=13, color=GREEN if s < i else GREY_C)
+                panel.add(fit(line.move_to([indent + 0.25 + line.width / 2, y, 0])))
                 continue
             done, now = s < i, s == i
             icon = Text("✔" if done else "▸" if now else "·", font=SANS, font_size=13,
@@ -611,9 +670,7 @@ class DebuggerScene(Scene):
             warns = bool(self.facts.get(self.steps[s].output.op()) and self.facts[self.steps[s].output.op()].warnings)
             line = Text(text, font=MONO, font_size=13, color=GREY_B if done else YELLOW_A if now else GREY_C)
             icon.move_to([indent + 0.3, y, 0])
-            line.move_to([indent + 0.45 + line.width / 2, y, 0])
-            if line.get_right()[0] > DIVIDER_X - 0.1:
-                line.scale_to_fit_width(DIVIDER_X - 0.1 - line.get_left()[0], about_edge=LEFT)
+            line = fit(line.move_to([indent + 0.45 + line.width / 2, y, 0]))
             row = VGroup(icon, line)
             if warns:  # known before the step runs: the analysis covers the whole trace
                 row.add(Text("⚠", font=SANS, font_size=13, color=RED).next_to(line, RIGHT, buff=0.08))
@@ -622,7 +679,7 @@ class DebuggerScene(Scene):
                 row = VGroup(band.move_to([(SHELF_LEFT + DIVIDER_X) / 2, y, 0]), *row)
             panel.add(row)
         if start > 0:
-            panel.add(Text("⋮", font=SANS, font_size=13, color=GREY_C).move_to([SHELF_LEFT + 2.6, BAR_BOTTOM - 0.18, 0]))
+            panel.add(Text("⋮", font=SANS, font_size=13, color=GREY_C).move_to([SHELF_LEFT + 2.6, self.bar_bottom - 0.18, 0]))
         return panel
 
     def _strip(self, i: int) -> VGroup:
@@ -647,28 +704,59 @@ class DebuggerScene(Scene):
         strip.arrange(RIGHT, buff=0.12)
         if strip.width > STAGE_W:
             strip.scale_to_fit_width(STAGE_W)
-        return strip.move_to([DIVIDER_X + 0.25 + strip.width / 2, STRIP_Y, 0])
+        return strip.move_to([DIVIDER_X + 0.25 + strip.width / 2, self.strip_y, 0])
+
+    def _code_block(self, step: Step) -> tuple[str, list[tuple[str, str, bool]]]:
+        """The place of the statement (`file.py:12`) and its display lines, wrapped to the width of the bar."""
+        frame = step.stack[-1] if step.stack else None
+        where = f"{os.path.basename(frame.filename)}:{frame.lineno}" if frame else ""
+        cw = _char_width(15, NORMAL)
+        right = 7.0 - len(where) * _char_width(13, NORMAL) - 0.3  # the place is at the right of the first line
+        lines = _code_lines(frame.filename, frame.lineno, int((right - SHELF_LEFT) / cw) - 6) if frame else []
+        return where, lines or [(str(frame.lineno) if frame else "", step.code, True)]
+
+    def _layout(self, i: int):
+        """Each line of the statement of step i after the first moves the trace, the pipeline and the stage down."""
+        extra = (len(self.code[i][1]) - 1) * CODE_LINE_H if self.code else 0
+        self.bar_bottom, self.strip_y, self.caption_y, self.zone_top = (y - extra for y in (BAR_BOTTOM, STRIP_Y, CAPTION_Y, ZONE_TOP))
+        self.trace_rows = TRACE_LINES - math.ceil(extra / 0.33)
 
     def _header(self, i: int, step: Step):
         """Top bar: step, operation, call path and the current statement. Left: the trace. Middle: the pipeline."""
-        frame = step.stack[-1] if step.stack else None
+        old_top = self.zone_top
+        self._layout(i)
         op = Text(step.op.upper(), font=SANS, font_size=26, weight=BOLD)
         op.move_to([SHELF_LEFT + op.width / 2, 3.72, 0])
         calls = " › ".join(f.name for f in step.stack if f.name != "<module>")
         path = Text(f"{calls}()" if calls else "", font=MONO, font_size=15, color=GREY_A)
         path.next_to(op, RIGHT, buff=0.35, aligned_edge=DOWN)
         counter = Text(f"step {i + 1}/{len(self.steps)}", font=SANS, font_size=17, color=GREY_B).to_corner(UR, buff=0.25)
-        statement = linecache.getline(frame.filename, frame.lineno).strip() if frame else ""
-        code = Text(f"{frame.lineno if frame else '':>4}  {(statement or step.code)[:130]}", font=MONO, font_size=15, color=YELLOW_A)
-        where = Text(f"{os.path.basename(frame.filename)}:{frame.lineno}" if frame else "", font=MONO, font_size=13, color=GREY_C)
+        where_text, lines = self.code[i]
+        where = Text(where_text, font=MONO, font_size=13, color=GREY_C)
         where.move_to([7.0 - where.width / 2, CODE_Y, 0])
-        if code.width > where.get_left()[0] - SHELF_LEFT - 0.3:
-            code.scale_to_fit_width(where.get_left()[0] - SHELF_LEFT - 0.3)
-        code.move_to([SHELF_LEFT + code.width / 2, CODE_Y, 0])
-        band = Rectangle(width=14.2, height=0.36, stroke_width=0).set_fill(CURRENT_LINE, 1).move_to([0, CODE_Y, 0])
-        chrome = VGroup(band, op, path, counter, code, where, self._strip(i))
+        cw, code = _char_width(15, NORMAL), VGroup()
+        x = SHELF_LEFT + 6 * cw  # the code starts after the line numbers
+        for k, (number, text, now) in enumerate(lines):  # the whole statement; the line of the current call is lit
+            y = CODE_Y - k * CODE_LINE_H
+            if now:
+                code.add(Rectangle(width=14.2, height=CODE_LINE_H, stroke_width=0).set_fill(CURRENT_LINE, 1).move_to([0, y, 0]))
+            if number:
+                label = Text(number, font=MONO, font_size=15, color=GREY_C)
+                code.add(label.move_to([x - cw - label.width / 2, y, 0]))
+            if text.strip():  # Text drops leading spaces: place the line at its indent
+                line = Text(text.strip(), font=MONO, font_size=15, color=YELLOW_A if now else GREY_A)
+                code.add(line.move_to([x + (len(text) - len(text.lstrip())) * cw + line.width / 2, y, 0]))
+        bar = VGroup(
+            Line([-7.1, self.bar_bottom, 0], [7.1, self.bar_bottom, 0], stroke_width=1, color=GREY_D),
+            Line([DIVIDER_X, self.bar_bottom, 0], [DIVIDER_X, SHELF_LINE, 0], stroke_width=1, color=GREY_D),
+            Text("TRACE", font=SANS, font_size=14, weight=BOLD, color=GREY_B).move_to([SHELF_LEFT + 0.3, self.bar_bottom - 0.18, 0]),
+        )
+        chrome = VGroup(bar, code, op, path, counter, where, self._strip(i))
         trace = self._trace(i)
         anims = [FadeTransform(self.chrome, chrome) if self.chrome else FadeIn(chrome)]
+        if self.carry is not None and self.zone_top != old_top:  # the table on the stage moves with the top of the stage
+            f = min(1.0, (self.zone_top - ZONE_BOTTOM) / (old_top - ZONE_BOTTOM))
+            anims.append(self.carry.animate.scale(f, about_point=self.carry.get_corner(UL)).shift(UP * (self.zone_top - old_top)))
         anims.append(FadeTransform(self.trace_panel, trace) if self.trace_panel else FadeIn(trace))
         self.play(*anims, run_time=0.6)
         self.chrome, self.trace_panel = chrome, trace
@@ -702,8 +790,16 @@ class DebuggerScene(Scene):
         facts = self.facts.get(op)
         return {c: column_text(facts, c, self.names.get(op, "")) for c in facts.columns} if facts else {}
 
+    def _named(self, step: Step, ins: list[Sample], out: Sample) -> tuple[list[Sample], Sample]:
+        """Grid titles: the variable of the code for an input, else the name of its table (`filtered orders`)."""
+        for sample, table in zip(ins, step.inputs):
+            if not sample.label.isidentifier():
+                sample.label = self.names.get(table.op(), sample.label)
+        out.label = self.names.get(step.output.op(), out.label)
+        return ins, out
+
     def _with_facts(self, step: Step, ins: list[Sample], out: Sample) -> tuple[list[Sample], Sample]:
-        inputs = [self.names.get(t.op(), "") for t in step.inputs]
+        ins, out = self._named(step, ins, out)
         for sample, table in zip(ins, step.inputs):
             sample.facts = self._facts_texts(table.op())
         out.facts = self._facts_texts(step.output.op())
@@ -795,11 +891,11 @@ class DebuggerScene(Scene):
     def _finish(self, i: int, step: Step, frame: ScopeFrame):
         """The result shrinks into its card; replaced and expired cards leave; the shelf closes up.
 
-        When the next step continues the chain, the result stays on the stage for it, and its card
-        appears on the shelf without the result moving there.
+        When the next step works on the result (a chain, or `t = t.filter(...)` then `t.mutate(...)`), the result
+        stays on the stage for it, and its card appears on the shelf without the result moving there.
         """
         self.carry = None  # a carried table that the step did not read leaves with the stage
-        continues = i + 1 < len(self.steps) and self.chain_of[i + 1] is self.chain_of[i] and self.result is not None
+        continues = i + 1 < len(self.steps) and self.steps[i + 1].inputs[0].op() == frame.output and self.result is not None
         persistent = {id(m) for m in self._persistent()}
         result = self.result or Group(*[m for m in self.mobjects if id(m) not in persistent])  # the stage can hold plain Groups
         family = {id(m) for m in result.get_family()}
@@ -822,8 +918,9 @@ class DebuggerScene(Scene):
                 anims.append(self.cards[key].animate.set_state(state).scale_to_fit_width(w).move_to(p))
         self.play(*anims, run_time=1.3)
         self.cards[frame.output], self.caption = card, None
-        if continues:
-            self.carry, self.carry_op, self.chain_rows = result, frame.output, self.next_rows
+        if continues:  # only a chain hands on its rows: a named table shows its own first rows
+            chained = self.chain_of[i + 1] is self.chain_of[i]
+            self.carry, self.carry_op, self.chain_rows = result, frame.output, self.next_rows if chained else {}
         else:
             self.chain_rows = {}
         self._settle()
@@ -838,7 +935,7 @@ class DebuggerScene(Scene):
         new = Text("▸ " + textwrap.fill(text, 95), font=SANS, font_size=18, color=CAPTION)
         if new.width > STAGE_W:
             new.scale_to_fit_width(STAGE_W)
-        new.move_to([DIVIDER_X + 0.25 + new.width / 2, CAPTION_Y - new.height / 2 + 0.12, 0])
+        new.move_to([DIVIDER_X + 0.25 + new.width / 2, self.caption_y - new.height / 2 + 0.12, 0])
         self.play(FadeTransform(self.caption, new) if self.caption else FadeIn(new), run_time=0.5)
         self.caption = new
         if wait:
@@ -952,7 +1049,7 @@ class DebuggerScene(Scene):
             self.next_rows = {}
             print(f"ibis_anim: plain animation for step {step.op} ({exc!r})", file=sys.stderr)
             self._settle()
-            self._flow(step, *_plain_samples(step, self.bind))
+            self._flow(step, *self._named(step, *_plain_samples(step, self.bind)))
 
     # -- choreographies ----------------------------------------------------------------------
 
@@ -975,16 +1072,21 @@ class DebuggerScene(Scene):
         self._settle(*grids, res)
         self.result = res
 
-    def _subset(self, step: Step, ins: list[Sample], out: Sample, test: str | None = None):
-        """Each row gets a mark when there is a test; removed rows turn red and leave; the others slide up."""
+    def _subset(self, step: Step, ins: list[Sample], out: Sample, test: str | None = None, condition: VGroup | None = None):
+        """Each row gets a mark when there is a test; removed rows turn red and leave; the others slide up.
+
+        `condition` is a filter label (see `_condition`): it stays at the right of the ✔/✘ marks.
+        """
         s = ins[0]
         idx = [i for i in _match(out.rows, s.rows, [(c, c) for c in s.columns]) if i is not None]
         keep = [i in idx for i in range(len(s.rows))]
         grid = Grid(s, _pick_columns(s.columns, step.used), _cell_width([s], s.columns), used=step.used)
-        self._in_place(grid)
+        self._in_place(grid, margin=max(2.5, condition.width + 1.2) if condition else 2.5)
         self._enter(grid)
         self._highlight(grid, step.used)
         verb = step.op.split()[-1]
+        if condition is not None:  # right of the marks, which are in the column after the last one
+            self._show_condition(condition, grid, grid.slot(0, len(grid.shown))[0] + 0.1)
         if test is not None:
             self._say(f"test each row: {test}")
         elif verb in ("limit", "head") and len(idx) < len(s.rows):
@@ -1003,9 +1105,16 @@ class DebuggerScene(Scene):
     def _filter(self, step: Step, ins: list[Sample], out: Sample):
         tree = _condition_tree(step.output.op())
         if tree[0] == "leaf":
-            self._subset(step, ins, out, test=_call_args(step.code, "filter"))
+            self._subset(step, ins, out, test=_call_args(step.code, "filter"), condition=_condition([_expr_text(tree[1])]))
         else:
             self._tests(step, ins, out, tree)
+
+    def _show_condition(self, label: VGroup, grid: Grid, left: float):
+        """Put the filter label at `left`, level with the rows, and fit it into the stage."""
+        if label.width > STAGE_X + STAGE_W / 2 - left:
+            label.scale_to_fit_width(STAGE_X + STAGE_W / 2 - left)
+        rows = (grid.slot(0, 0)[1] + grid.slot(len(grid.sample.rows) - 1, 0)[1]) / 2
+        self.play(FadeIn(label.move_to([left + label.width / 2, rows, 0]), shift=LEFT * 0.2), run_time=0.6)
 
     def _tests(self, step: Step, ins: list[Sample], out: Sample, tree):
         """Each test gets a column of ✔/✘. Then, per row, the marks merge into the result (AND / OR)."""
@@ -1015,14 +1124,19 @@ class DebuggerScene(Scene):
         idx = [i for i in _match(out.rows, s.rows, [(c, c) for c in s.columns]) if i is not None]
         keep = [i in idx for i in range(len(s.rows))]
         width = _cell_width([s], s.columns)
+        numbers = {id(leaf): j + 1 for j, leaf in enumerate(leaves)}
+        rule, mixed = _tree_text(tree, numbers), any(c[0] != "leaf" for c in tree[1])
+        words = rule if mixed else {"and": "every test passes:", "or": "at least one test passes:"}[tree[0]]  # 1 AND 2 AND 3 is long
+        condition = _condition([words, *(f"{j + 1}: {_expr_text(leaf)}" for j, leaf in enumerate(leaves))])
         grid = Grid(s, _pick_columns(s.columns, step.used, MAX_COLUMNS - 1), width, used=step.used)
-        self._in_place(grid, margin=(len(leaves) + 1) * width + 1.0)
+        self._in_place(grid, margin=(len(leaves) + 1) * width + 1.0 + condition.width)
         self._enter(grid)
         cw, f = grid.cell_w, grid.cell_w / width
         rh = grid.slot(0, 0)[1] - grid.slot(1, 0)[1]
         right = grid.slot(-1, len(grid.shown) - 1)[0] + cw / 2
         x = lambda j: right + 0.25 * f + (j + 0.5) * cw + j * 0.06 * f  # noqa: E731
         y = lambda r: grid.slot(r, 0)[1]  # noqa: E731
+        self._show_condition(condition, grid, x(len(leaves)) + cw / 2 + 0.25)  # right of the result column
         decorations = [VGroup() for _ in s.rows]
         for j, leaf in enumerate(leaves):
             self._say(f"test {j + 1}: {_expr_text(leaf)}", wait=0.2)
@@ -1033,10 +1147,7 @@ class DebuggerScene(Scene):
                       run_time=0.5 + 0.2 * len(marks))
             for row, m in zip(decorations, marks):
                 row.add(m)
-        numbers = {id(leaf): j + 1 for j, leaf in enumerate(leaves)}
-        rule = _tree_text(tree, numbers)
         meaning = {"and": "a row stays when every test passes", "or": "a row stays when at least one test passes"}
-        mixed = any(c[0] != "leaf" for c in tree[1])
         self._say(f"{rule}: " + ("a row stays when the whole condition is true" if mixed else meaning[tree[0]]))
         n = len(leaves)
         header = _label_cell(rule, cw, rh, RESULT_FILL).move_to([x(n), y(-1), 0])
@@ -1216,7 +1327,7 @@ class DebuggerScene(Scene):
 
     def _retitle(self, grid: Grid, out: Sample):
         """An in-place step keeps drawing its input table: at the end, its title names the result."""
-        title = Text(f"result · {out.total} rows" + (" in full" if out.partial else ""), font=SANS, font_size=18, color=GREY_A)
+        title = Text(f"{out.label} · {out.total} rows" + (" in full" if out.partial else ""), font=SANS, font_size=18, color=GREY_A)
         self.play(Transform(grid.title, title.scale(grid.title.height / title.height).move_to(grid.title, aligned_edge=LEFT)))
 
     def _refresh_facts(self, grid: Grid, out: Sample):
