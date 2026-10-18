@@ -1,0 +1,10 @@
+name: ibis-anim
+version: 0.1.0
+description: Use ibis-anim to render a debugger video of ibis code, and extend the library with new operations, animations and facts. Install it in a project that uses ibis-anim, or in a clone of ibis-anim.
+author: fleskovar
+tags: [ibis, manim, data, visualization, python]
+flavors:
+  use:
+    description: Instructions for projects that use ibis-anim to render videos of ibis code
+  develop:
+    description: Context for developers of ibis-anim itself, for example to animate a new ibis operation or add a facts rule
