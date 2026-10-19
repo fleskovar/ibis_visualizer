@@ -18,7 +18,7 @@ Read [the architecture](./architecture.md) before you change code. It names the 
 - Keep the stages apart. `_scope.py`, `_facts.py`, `_derive.py` and `_samples.py` do not import manim. Test them without a render.
 - The facts never come from data. A rule that is not certain gives no fact. A missing fact is acceptable. A wrong fact is a defect.
 - Keep long pipelines fast. Use `_derive._substitute`, not `Node.replace`, and read real data through the tables of `_materialize`. See [Keep long pipelines fast](./recipes.md#keep-long-pipelines-fast).
-- In this environment, ibis 12 with sqlglot 30 cannot run a `DROP`. Do not use `Table.cache()` or `create_table(..., overwrite=True)`. Make a temporary table with a new name.
+- `pyproject.toml` keeps sqlglot below 30.18. From 30.18, ibis 12 writes a `DROP` without a table name, so `Table.cache()`, `create_table(..., overwrite=True)` and the memtable cleanup at exit fail. Remove the limit only after a new ibis release passes the checks with the new sqlglot.
 - A derived table name always has a space. `chains()` and the lineage in `_derive.py` treat a name that is a Python identifier as a variable of the program.
 
 ## Workflow
