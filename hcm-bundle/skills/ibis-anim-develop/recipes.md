@@ -126,14 +126,25 @@ A choreography is a method of `DebuggerScene` in `ibis_anim/_scene.py`. It draws
 
 ## Improve the sample rows
 
-`generate` in `ibis_anim/_samples.py` makes 6 rows for each schema-only source table. It collects hints from the trace first.
+`for_step(step, facts, computed)` in `ibis_anim/_samples.py` makes about 6 rows for each schema-only table that one step reads. Each step gets its own rows. The values stay inside the facts of each input, so the rows agree with the steps before.
 
-1. To add a hint from the code, add a loop over the op type in the loop over `_own_values(step.output.op())`. Find the source column with `source_columns(field.rel, field.name)`, and append `(op type, literal value)` to `hints[source column]`.
-2. To change the values for a hint, change `_around`. For each test on a literal, give values that pass and values that fail.
-3. To change the values of a type, change `_base`.
-4. Add a check in `tests/test_samples.py`. Assert on the generated values, and that each test of the code has rows that pass and rows that fail.
+1. To test a new kind of condition, extend `_tests`. It turns each test of a column into `((table, column), values that pass, whether null passes)`. `_patterns` and `_tested` then give each test rows that pass and rows that fail.
+2. To change the values near a test, change `_around`. To change the values of a type, change `_base`.
+3. For an argument that needs a row shape, for example repeated keys or nulls, extend `_repeated` or `_null_columns`, or add a branch for the verb at the end of `for_step`. Do not break a fact: a declared key stays unique.
+4. A join reads keys from `_join_keys`. It links each join of a chained join, in order. `_link` gives the right key every second value of the left key.
+5. Columns that an earlier mutate computes, and filters before the table, go through `_below` and `_recomputed`. Each value reads the generated columns, with the formula of an earlier computed column in place of the column, so one flat query runs them all. Do not build a chain of `mutate` calls: it compiles slowly on a long pipeline.
+6. Add a check in `tests/test_samples.py`. Run the step on its rows with the `run` helper of that file. Assert on the rows of the step after the change too, because a wrong row often shows one step later.
 
 The sample rows are for the video only. The facts must not use them.
+
+## Keep long pipelines fast
+
+The render time of the data must grow with the number of steps, not faster.
+
+- Use `_derive._substitute`, not `Node.replace`. `replace` walks the whole plan below the expression at each call.
+- Read the rows and counts of a step on real data through the computed tables: pass `self.computed` to `_run_on_samples`, `_plain_samples` and `for_step`.
+- Make a memtable of DuckDB rows with `_scene._memtable`. It copies the rows, so that DuckDB buffers do not stay alive until exit.
+- To measure, trace a long synthetic pipeline (80 steps or more) and time the data path without manim. Count the backend calls: each step must run a fixed number of queries.
 
 ## Read a dbt test
 

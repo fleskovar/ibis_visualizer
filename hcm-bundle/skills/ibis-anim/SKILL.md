@@ -78,7 +78,7 @@ These rules apply to all forms:
 | `IBIS_ANIM` | `0`, `1` | `1` | `0` turns off the render at exit. Use it for tests and quick runs. |
 | `IBIS_ANIM_QUALITY` | `low` (480p, 15 fps), `medium` (720p, 30 fps), `high` (1080p, 30 fps) | `high` | The resolution of the video. A 1080p render takes about 2.5 times as long as a 480p render. |
 
-`render(steps, name, output_dir="media", quality=None)` takes the same values as arguments. A script of 22 steps takes about 10 minutes at `high`. Use `low` to check a change, and `high` for the final video.
+`render(steps, name, output_dir="media", quality=None)` takes the same values as arguments. Most of the time goes to manim, about 30 seconds for each step at `low`: the example `customer_health.py`, with 22 steps, takes about 10 minutes at `low`. Use `low` to check a change, and `high` for the final video.
 
 ## The API
 
@@ -131,7 +131,16 @@ At exit, the render also prints each warning to the terminal, with the prefix `i
 
 ## Pipelines without data
 
-A table with a schema only, `ibis.table({"order_id": "int64", ...}, name="orders")`, has no rows. For such a table, ibis-anim generates 6 rows from the column types, the declarations and the literals of the code. A filter `amount > 100` gets values on both sides of 100. Two columns that a join compares only partly match. The generated rows illustrate the steps only. The facts do not use them.
+A table with a schema only, `ibis.table({"order_id": "int64", ...}, name="orders")`, has no rows. For such a table, each step gets its own generated rows, about 6 for each table that it reads:
+
+- The rows agree with the facts of the steps before. After `filter(_.status == "paid")`, the next step gets rows with status `paid` only.
+- Each test of a filter has rows that pass it and rows that fail it. A filter `amount > 100` gets values on both sides of 100.
+- About half of the keys of a join match. Each join of a chained join gets keys that match.
+- A column that an earlier mutate computes agrees with the other columns of its row. A row that fails an earlier filter is removed.
+- In a chain, a caption says that the step gets its own rows, not the rows of the step before.
+- A step that casts text to another type gets no rows. The video shows the change of the types only.
+
+The generated rows illustrate the steps only. The facts do not use them. A grid of generated rows shows `6 generated rows`, not a row count.
 
 ## dbt-ibis models
 
@@ -203,3 +212,4 @@ The script `./frames.py` saves one frame every 2 seconds and the last frame of e
 - The trace shows the path that ran. It does not show branches that did not run.
 - Each grid shows the first 6 rows and at most 6 columns. The values of a result come from these rows only.
 - The window animation draws row frames only. It does not draw range frames.
+- On DuckDB and in-memory tables, the render computes each step once into a temporary table, and keeps these tables in memory until the process ends. A pipeline with large intermediate results needs that memory. On other backends, each count runs the pipeline from its sources, which is slow for a long pipeline.

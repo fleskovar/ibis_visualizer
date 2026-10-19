@@ -119,12 +119,14 @@ A pipeline can use tables that have a schema only: `ibis.table({"order_id": "int
 - the facts of each input table: value sets, ranges, keys and nulls. The facts hold what the steps before guarantee, so the rows agree with them. After `filter(_.status == "paid")`, the next step gets rows with status `paid` only
 - the arguments of the step:
   - filter, `ifelse`, `case`: each test (`==`, `>`, `isin`, `between`, `isnull`) has rows that pass it and rows that fail it. Two rows pass all tests, one row fails each test on its own, and one row fails all of them
-  - join: about half of the right keys match the left keys, the other half do not. A right key that is not unique repeats, so the join fans out
-  - group_by, window partitions, pivot_wider: the keys repeat, so each group has several rows. A distinct gets duplicate rows. A union, intersect or difference gets rows that are in both tables
+  - join: about half of the right keys match the left keys, the other half do not. A right key that is not unique repeats, so the join fans out. In a chained join, each join of the chain gets keys that match
+  - group_by, window partitions, pivot_wider: the keys repeat, so each group has several rows. A distinct gets duplicate rows, except on a table with a declared key. A union, intersect or difference gets rows that are in both tables
   - drop_null, fill_null, coalesce: the columns that can be null get nulls
 - the types of the columns: `A, B, C` for strings, `1, 2, 3` for integers, spread values for floats, dates from 2024-01-01
 
-A column that a mutate before the step computes from other columns is computed again from the generated rows: after `big=_.amount > 200`, a row with amount 250 has `big` true.
+A column that a mutate before the step computes from other columns is computed again from the generated rows: after `big=_.amount > 200`, a row with amount 250 has `big` true. A row that fails a filter before the step is removed: after `filter(_.big)`, no row has `big` false.
+
+In a chain of steps, the result of a step stays on the stage as the input of the next step. On a table with a schema only, the next step gets its own generated rows, and a caption says so.
 
 A step that casts a text column to another type gets no rows: the video shows the change of the types only, and the warning that a text that does not parse makes the cast fail. The grid title reads `schema only`; the title of a grid with generated rows reads `6 generated rows`, as a table with a schema only has no row count.
 

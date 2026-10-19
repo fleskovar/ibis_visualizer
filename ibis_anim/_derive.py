@@ -72,12 +72,30 @@ def _frontier(output, known: dict) -> list:
     return found
 
 
+def _substitute(op, mapping: dict):
+    """`op` with each node of `mapping` replaced by its value.
+
+    The walk stops at the nodes of `mapping`: it does not visit the plan below them. A full `replace` visits the
+    whole plan, so on a long pipeline each call costs as much as all the steps before it.
+    """
+    if not mapping:
+        return op
+    own, stack = set(), [op]
+    while stack:
+        node = stack.pop()
+        if node not in own:
+            own.add(node)
+            if node not in mapping:
+                stack.extend(node.__children__)
+    return op.replace(mapping, filter=own.__contains__)
+
+
 def _step(step, frontier: list, ins: list[TableFacts], labels: list[str]) -> TableFacts:
     names = {f"in{k}": f"in{k}" for k in range(len(ins))}
     placeholders = {op: ibis.table(op.schema, name=n).op() for op, n in zip(frontier, names)}
     schema = {n: {c: DuckDBType.from_ibis(d).sql("duckdb") for c, d in op.schema.items()} for op, n in zip(frontier, names)}
     try:
-        tree = sqlglot.parse_one(ibis.to_sql(step.output.op().replace(placeholders).to_expr(), dialect="duckdb"), read="duckdb")
+        tree = sqlglot.parse_one(ibis.to_sql(_substitute(step.output.op(), placeholders).to_expr(), dialect="duckdb"), read="duckdb")
         try:
             tree = optimize(tree, schema=schema, dialect="duckdb")
         except Exception:  # some shapes fail an optimizer rule; qualifying alone is enough for the rules

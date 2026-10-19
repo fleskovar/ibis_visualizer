@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import itertools
 import linecache
 import math
 import os
@@ -30,7 +31,7 @@ from manim import (
     tempconfig,
 )
 
-from ibis_anim._derive import column_text, derive
+from ibis_anim._derive import _substitute, column_text, derive
 from ibis_anim._samples import for_step, needs_rows
 from ibis_anim._scope import ScopeFrame, calls, chains, plan, table_names
 from ibis_anim._tracer import Step, _names, recording, trace
@@ -82,7 +83,8 @@ def render(steps: list[Step], name: str, output_dir="media", quality: str | None
     width, height, fps = QUALITIES[quality or os.environ.get("IBIS_ANIM_QUALITY", "high")]
     config = {"pixel_width": width, "pixel_height": height, "frame_rate": fps, "media_dir": str(output_dir),
               "save_sections": True, "output_file": name, "verbosity": "WARNING", "progress_bar": "none",
-              "text_dir": str(Path(output_dir) / "texts" / name)}  # a text cache per video: renders side by side do not race
+              "text_dir": str(Path(output_dir) / "texts" / name),  # a text cache per video: renders side by side do not race
+              "disable_caching": True}  # the cache hashes each mobject at each play, about half of the render; old clips go anyway
     # manim keeps partial files in a folder named after the scene class: one class per video, so that renders can run side by side
     scene_class = type(re.sub(r"\W", "_", name) or "Video", (DebuggerScene,), {})
     with recording(None), tempconfig(config):  # the previews run ibis methods: do not record them
@@ -126,39 +128,67 @@ def _types(table) -> dict[str, str]:
 
 
 def _memtable(rows: pa.Table, schema):
-    mem = ibis.memtable(rows)
+    # a copy: arrow from DuckDB keeps its DuckDB buffers, about 8 MB a column, and ibis keeps each memtable until exit
+    mem = ibis.memtable(pa.Table.from_pylist(rows.to_pylist(), schema=rows.schema))
     return (mem if mem.schema() == schema else mem.cast(schema)).op()
 
 
-def _binder(given: dict):
-    """The tables of `given` as memtables, and a function that runs a table on them: a table with a schema only
-    reads its generated rows."""
-    mapping = {op: _memtable(rows, op.schema) for op, (rows, _) in given.items()}
-    return mapping, lambda table: table.op().replace(mapping).to_expr() if mapping else table
+_TEMP = itertools.count()  # names of the tables that `_materialize` makes
 
 
-def _run_on_samples(step: Step, given: dict | None = None):
+def _materialize(steps: list[Step]) -> dict:
+    """The output of each step on real data, computed once into a temporary table: output op → op of the table.
+
+    Each step reads the tables of the steps before it, so a count or a first-rows query runs one step, not the
+    whole pipeline again. The rows of a step stay the same in each query, also after `sample` or a `limit`
+    without an order. Only DuckDB gets the tables: on another backend, the queries run on the full plan.
+    """
+    computed = {}
+    for step in steps:
+        op = step.output.op()
+        if op in computed or needs_rows(op):
+            continue
+        try:
+            expr = _substitute(op, computed).to_expr()
+            backend = expr._find_backend(use_default=True)
+            if backend.name == "duckdb":  # ponytail: the tables stay in memory until the connection closes
+                computed[op] = backend.create_table(f"_ibis_anim_{next(_TEMP)}", expr, temp=True).op()
+        except Exception:  # a step that does not compute here runs its queries on the full plan
+            pass
+    return computed
+
+
+def _binder(given: dict, computed: dict):
+    """The tables of `given` as memtables, and a function that runs a table on them and on the `computed` tables of
+    the steps before: a table with a schema only reads its generated rows."""
+    mapping = computed | {op: _memtable(rows, op.schema) for op, (rows, _) in given.items()}
+    return mapping, lambda table: _substitute(table.op(), mapping).to_expr()
+
+
+def _run_on_samples(step: Step, given: dict | None = None, computed: dict | None = None):
     """The first rows of each input, the output of the step on these rows only, and the output rows as arrow.
 
     `given` maps a table op to (arrow rows, partial): the rows that `for_step` generated for a table with a
     schema only, or in a chain, the rows that the step before it showed (not a new sample of the full table).
+    `computed` maps a table op to the table that `_materialize` made for it.
     """
     given = given or {}
-    mapping, run = _binder(given)  # a chained join reads the tables of the joins before it: they run on their given rows too
+    mapping, run = _binder(given, computed or {})  # a chained join reads the tables of the joins before it: they run on their given rows too
     arrows = [given[t.op()][0] if t.op() in given else run(t).head(PREVIEW_ROWS).to_pyarrow() for t in step.inputs]
-    mapping = mapping | {t.op(): _memtable(a, t.schema()) for t, a in zip(step.inputs, arrows)}
+    mapping = {k: v for k, v in mapping.items() if k != step.output.op()}  # the step itself runs on the rows
+    mapping |= {t.op(): _memtable(a, t.schema()) for t, a in zip(step.inputs, arrows)}
     ins = [Sample(label, t.columns, a.to_pylist(), _count(run(t)), partial=t.op() in given and given[t.op()][1],
                   types=_types(t), source=t.op(), generated=needs_rows(t))
            for t, label, a in zip(step.inputs, step.labels, arrows)]
-    result = step.output.op().replace(mapping).to_expr().to_pyarrow()
+    result = _substitute(step.output.op(), mapping).to_expr().to_pyarrow()
     partial = any(s.partial or len(s.rows) < s.total for s in ins)
     out = Sample("result", step.output.columns, result.to_pylist(), _count(run(step.output)), partial, _types(step.output),
                  generated=needs_rows(step.output))
     return ins, out, result.slice(0, MAX_RESULT_ROWS)
 
 
-def _plain_samples(step: Step, given: dict | None = None) -> tuple[list[Sample], Sample]:
-    run = _binder(given or {})[1]
+def _plain_samples(step: Step, given: dict | None = None, computed: dict | None = None) -> tuple[list[Sample], Sample]:
+    run = _binder(given or {}, computed or {})[1]
 
     def sample(label, t):
         try:
@@ -293,7 +323,7 @@ def _tree_text(tree, numbers: dict) -> str:
 def _evaluate(values: list, table, rows: list[dict]) -> list[list]:
     """The value of each expression on each of `rows` of `table`: the expressions run on a memtable of the rows."""
     mem = ibis.memtable(pa.Table.from_pylist(rows, schema=table.schema().to_pyarrow()))
-    exprs = {f"v{k}": v.replace({table.op(): mem.op()}).to_expr() for k, v in enumerate(values)}
+    exprs = {f"v{k}": _substitute(v, {table.op(): mem.op()}).to_expr() for k, v in enumerate(values)}
     found = mem.select(**exprs).to_pyarrow().to_pylist()
     return [[r[f"v{k}"] for k in range(len(values))] for r in found]
 
@@ -596,6 +626,7 @@ class DebuggerScene(Scene):
             print(f"ibis_anim: no facts ({exc!r})", file=sys.stderr)
             self.facts = {}
         self.made = {}  # table op → the rows that a step generated for it or computed from generated rows
+        self.computed = _materialize(steps)  # table op → its rows in a temporary table: each step runs once
         self.columns_from = {s.output.op(): s.labels[0] for s in steps if s.op == "column"}
         self.chain_of = {i: run for run in chains(steps, self.names) for i in run}
         self.chrome = self.caption = self.trace_panel = self.dag_panel = self.result = self.carry = self.carry_op = None
@@ -841,7 +872,7 @@ class DebuggerScene(Scene):
         if key not in self.rows and needs_rows(key):  # a schema only: the rows that a step made for it, if any
             self.rows[key], self.previews[key] = "?", self.made.get(key, [])[:3]
         elif key not in self.rows:
-            table = key.to_expr()
+            table = _substitute(key, self.computed).to_expr()
             self.rows[key] = _count(table)
             self.previews[key] = table.head(3).to_pyarrow().to_pylist()
         facts = self.facts.get(key)
@@ -1122,8 +1153,11 @@ class DebuggerScene(Scene):
         )
         given = self.chain_rows
         try:  # a step that reads a table with a schema only gets its own rows, not the rows of the chain
-            given = {op: (rows, False) for op, rows in for_step(step, self.facts).items()} or given
-            ins, out, rows = _run_on_samples(step, given)
+            made = {op: (rows, False) for op, rows in for_step(step, self.facts, self.computed).items()}
+            if made and self.chain_rows:
+                self._say("a schema only: this step gets its own generated rows, not the rows of the step before")
+            given = made or given
+            ins, out, rows = _run_on_samples(step, given, self.computed)
             self.next_rows = {step.output.op(): (rows, out.partial)}  # for the next step, if it continues the chain
             if out.generated:  # for the card of the result
                 self.made[step.output.op()] = out.rows
@@ -1134,7 +1168,7 @@ class DebuggerScene(Scene):
             self.next_rows = {}
             print(f"ibis_anim: plain animation for step {step.op} ({exc!r})", file=sys.stderr)
             self._settle()
-            self._flow(step, *self._named(step, *_plain_samples(step, given)))
+            self._flow(step, *self._named(step, *_plain_samples(step, given, self.computed)))
 
     # -- choreographies ----------------------------------------------------------------------
 

@@ -446,10 +446,14 @@ new_expr = expr.op().replace({old_table.op(): new_table.op()}).to_expr()
 
 An ibis expression stores a graph of immutable op nodes. `Node.replace` returns a copy of the graph with some nodes replaced. The recorded step keeps its own expression, so each block can substitute its own inputs.
 
+`Node.replace` visits the whole plan below the expression. On a long pipeline, each call then costs as much as all the steps before it. `_derive._substitute` ([`_derive.py:75`](../ibis_anim/_derive.py#L75)) stops the walk at the replaced nodes, and each block uses it.
+
 | Block | Replaces the inputs with | Why |
 | --- | --- | --- |
 | Facts, `_derive._step` | unbound tables `in0`, `in1` | The SQL of one step reads its direct inputs only, not the full plan above them. |
+| Computed steps, `_scene._materialize` | the temporary tables of the steps before | Each step on real data runs once. A count does not run the whole pipeline again (section 12). |
 | Re-run on generated rows, `_scene._binder` | memtables of the rows that `for_step` generated | A schema-only table has no data to read. |
+| Computed columns, `_samples._recomputed` | the columns of a memtable of generated rows | A column that a mutate computes agrees with the other columns of its row (section 10). |
 | Re-run, `_scene._run_on_samples` | memtables of the first 6 rows | Each value on the screen comes from the rows on the screen. |
 | Part values, `_scene._evaluate` | a memtable of the rows on the screen | The animations of a filter with several tests, of `coalesce` and of `ifelse` show the value of each part on each row. |
 
@@ -626,9 +630,9 @@ A declaration must state a rule that holds for any data, such as an enum type, a
 
 1. **Facts of the input.** The facts of each table (section 9) hold what the steps before guarantee. The value of a row is inside the value set of its column, a key gets distinct values, and a column that is never null gets no null. After `filter(_.status == "paid")`, the next step gets rows with status `paid` only.
 2. **Tests of the step.** `_tests` turns each test of a column into the interval of the values that pass it: `amount > 100` gives `(100, +inf)`. `_patterns` decides which tests each row passes: two rows pass all, one row fails each test on its own, and one row fails all. `_tested` picks a value inside the facts and on the side of each test that the row needs.
-3. **Join keys.** `_link` gives the right key every second value of the left key, and new values in between. A right key that is not unique repeats a value, so the join fans out.
-4. **Other arguments.** Group keys, window partitions and `names_from` repeat with a period of 2 or 3. A distinct gets duplicate rows. A set operation gets rows that are in both tables. `drop_null`, `fill_null` and `coalesce` get nulls.
-5. **Computed columns.** `_recomputed` computes again each column that a mutate before the table computes from other columns of the table. Thus `big = amount > 200` agrees with `amount` in each row.
+3. **Join keys.** `_link` gives the right key every second value of the left key, and new values in between. A right key that is not unique repeats a value, so the join fans out. A chained join reads new rows for each table of the chain, so `_join_keys` links the keys of each join of the chain, in the order of the joins.
+4. **Other arguments.** Group keys, window partitions and `names_from` repeat with a period of 2 or 3. A distinct gets duplicate rows, except on a table with a declared key. A set operation gets rows that are in both tables. `drop_null`, `fill_null` and `coalesce` get nulls.
+5. **Computed columns and filters.** `_below` finds the mutates and the filters before the table, down to a join or an aggregate. `_recomputed` computes again each column that a mutate computes from other columns of the table, and removes the rows that fail a filter. Thus `big = amount > 200` agrees with `amount` in each row, and after `filter(_.big)` no row has big false. A table with a filter before it gets 12 rows, and keeps the first 6 that pass. One flat query does this work: each formula reads the generated columns, with the formula of an earlier computed column in place of that column. A chain of `mutate` calls compiles slowly.
 6. **Types.** The other values come from the type: `A, B, C` for strings, `1, 2, 3` for integers, dates from 2024-01-01.
 
 A step that casts a text column to another type gets tables without rows: no generated text is sure to parse. The video shows the change of the types, and the facts give the warning `cast of x to BIGINT fails on a text that is not a BIGINT`.
@@ -658,14 +662,18 @@ The dbt tests `unique`, `not_null` and `accepted_values`, and the constraints `p
 
 **Responsibility.** Give each animation the input rows and the output rows that it draws, so that each value on the screen comes from the rows on the screen.
 
-`_run_on_samples` ([`_scene.py:127`](../ibis_anim/_scene.py#L127)) does these steps for one step:
+Before the first step, `_materialize` ([`_scene.py:139`](../ibis_anim/_scene.py#L139)) computes the output of each step on real data once, into a DuckDB temporary table. Each step reads the tables of the steps before it. Thus a count or a first-rows query runs one step, not the whole pipeline again. The rows of a step are also the same in each query, after `sample` or a `limit` without an order too. `_binder` replaces each table with its temporary table. On a backend other than DuckDB, the queries run on the full plan.
+
+`_memtable` copies the rows before it makes a memtable. An arrow table from DuckDB keeps its DuckDB buffers, about 8 MB for each column, and ibis keeps each memtable until exit. Without the copy, DuckDB runs out of memory after about 60 steps on a wide table.
+
+`_run_on_samples` ([`_scene.py:168`](../ibis_anim/_scene.py#L168)) does these steps for one step:
 
 1. Take the first 6 rows of each input. A schema-only table reads the rows that `for_step` generated for this step (section 10).
 2. Replace each input with a memtable of its rows (section 8).
 3. Execute the replaced output on DuckDB. Keep at most 8 result rows.
 4. Return a `Sample` for each input and one for the output. A `Sample` holds the label, the columns, the rows, the full row count, the column types and the facts text.
 
-In a chain, a step reads the rows that the step before it showed, not a new sample of the full table. The scene passes those rows as `given`. The `Sample` then has `partial=True`, and the grid title says `of the rows shown`.
+In a chain, a step reads the rows that the step before it showed, not a new sample of the full table. The scene passes those rows as `given`. The `Sample` then has `partial=True`, and the grid title says `of the rows shown`. A step on a schema-only table gets its own generated rows instead, and a caption says so.
 
 ## 13. Block: the scene
 
@@ -742,7 +750,7 @@ for i, (step, frame) in enumerate(zip(self.steps, self.frames)):
 
 ### 13.4 The choreographies
 
-`_animate` ([`_scene.py:1083`](../ibis_anim/_scene.py#L1083)) calls `_run_on_samples` (section 12). Then it sends the step to the choreography of its verb:
+`_animate` ([`_scene.py:1135`](../ibis_anim/_scene.py#L1135)) calls `_run_on_samples` (section 12). Then it sends the step to the choreography of its verb:
 
 | Verb | Method | Phases |
 | --- | --- | --- |
@@ -844,3 +852,6 @@ The code marks each deliberate simplification with a `ponytail:` comment. These 
 - **Missing facts.** A SQL shape that the rules do not read gives no facts for that step. This result is sound, but the video shows less.
 - **Plain animation.** An operation shape that a choreography does not handle gets the `_flow` animation.
 - **Long names.** A derived name longer than 40 characters is cut, not rephrased.
+- **Memory.** The temporary table of each step stays in DuckDB memory until the connection closes. A pipeline with large intermediate results needs that memory.
+- **Formula size.** `_recomputed` puts the formula of a computed column in place of each read of that column. A formula that reads a column twice doubles in each later formula that reads it.
+- **Filters on generated rows.** If no generated row passes the filters before a table, the rows break those filters.

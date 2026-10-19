@@ -81,9 +81,41 @@ def test_a_step_on_real_data_gets_no_rows():
     assert for_step(steps[0], derive(steps, table_names(steps))) == {}
 
 
+def last_input(func):
+    """The rows of the first input of the last step of `func`."""
+    steps = ibis_anim.trace(func)[1]
+    _, ins, out = run(steps[-1], derive(steps, table_names(steps)))
+    return ins[0].to_pylist(), out
+
+
+def test_rows_after_a_filter_on_a_computed_column_pass_it():
+    rows = last_input(lambda: orders.mutate(big=_.amount > 200).filter(_.big).mutate(x=_.amount * 2))[0]
+    assert rows and all(r["big"] and r["amount"] > 200 for r in rows)
+    rows = last_input(lambda: orders.mutate(x=_.amount * 2).filter(_.x > 300).mutate(y=_.x + 1))[0]
+    assert rows and all(r["x"] > 300 and r["x"] == r["amount"] * 2 for r in rows)
+
+
+def test_each_join_of_a_chain_has_matching_keys():
+    def chain():
+        big = orders.filter(_.customer_id > 100)  # its keys do not overlap the plain values 1, 2, 3 of customers
+        return big.join(customers, "customer_id").join(regions, "region")
+
+    rows, out = last_input(chain)
+    assert rows and out.num_rows
+
+
+def test_distinct_keeps_a_declared_key_unique():
+    rows = last_input(lambda: customers.distinct())[0]
+    keys = [r["customer_id"] for r in rows]
+    assert len(set(keys)) == len(keys)
+
+
 if __name__ == "__main__":
     test_each_step_has_its_own_rows()
     test_rows_follow_the_facts_and_the_join_keys()
     test_a_step_that_casts_text_has_no_rows()
     test_a_step_on_real_data_gets_no_rows()
+    test_rows_after_a_filter_on_a_computed_column_pass_it()
+    test_each_join_of_a_chain_has_matching_keys()
+    test_distinct_keeps_a_declared_key_unique()
     print("ok")

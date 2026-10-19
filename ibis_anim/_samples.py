@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime
 import decimal
+import functools
 import string
 from itertools import count
 
@@ -25,7 +26,7 @@ import ibis.expr.operations as ops
 import portion as P
 import pyarrow as pa
 
-from ibis_anim._derive import _frontier
+from ibis_anim._derive import _frontier, _substitute
 from ibis_anim._facts import ANY, TableFacts
 
 ROWS, MAX_ROWS, SET_ROWS = 6, 8, 4
@@ -40,15 +41,20 @@ NULL_STEPS = ("drop_null", "fill_null")
 
 def needs_rows(table) -> bool:
     """True when the table reads a table with a schema only: its rows must be generated."""
-    op = table.op() if hasattr(table, "op") else table
-    return bool(op.find(ops.UnboundTable))
+    return _reads_unbound(table.op() if hasattr(table, "op") else table)
 
 
-def for_step(step, facts: dict) -> dict:
+@functools.cache
+def _reads_unbound(op) -> bool:
+    return bool(op.find(ops.UnboundTable))  # ponytail: one walk of the plan for each op, then cached; a walk that stops at known ops is faster
+
+
+def for_step(step, facts: dict, computed: dict | None = None) -> dict:
     """Generated rows (a pyarrow table) for each schema-only table that the step reads.
 
     The tables are the frontier of the step: usually its inputs, but a chained join reads the tables of
     the joins before it. A step on real data gets {}. A step that casts text gets tables without rows.
+    `computed` maps a table op to the op of a table that holds its rows: a join key on real data reads it.
     """
     output = step.output.op()
     known = set(facts) | {t.op() for t in step.inputs} | set(output.find(ops.UnboundTable))
@@ -69,24 +75,26 @@ def for_step(step, facts: dict) -> dict:
     data, real = {}, {}
     for op in tables:
         f = facts.get(op) or TableFacts({})
+        below = _below(op)
+        m = 2 * n if any(kind == "test" for kind, *_ in below) else n  # a filter before the table drops rows: make more, keep n
         columns = {}
         for j, (name, dtype) in enumerate(op.schema.items()):
             col, unique = f.column(name), f.unique(name)
             period = 0 if unique else repeat.get(name) or (3 if dtype.is_string() or dtype.is_boolean() else 0)
-            values = _values(dtype, col.values, n, period)
+            values = _values(dtype, col.values, m, period)
             mine = [(k, t) for k, t in enumerate(tests) if t[0] == (op, name)]
             if mine:
                 chosen = []
-                for r in range(n):
+                for r in range(m):
                     chosen.append(_tested(dtype, col, [(t[1], t[2], patterns[r % len(patterns)][k]) for k, t in mine], values[r], chosen))
                 values = chosen
             if name in nulls and col.nulls != "never":
                 values = [None if r % 3 == 1 + j % 2 else v for r, v in enumerate(values)]
             columns[name] = values
-        data[op] = _recomputed(op, columns)
+        data[op] = {c: v[:n] for c, v in _recomputed(op, columns, below).items()}
     for left, right in _join_keys(output, data):
-        _link(data, left, right, facts, real)
-    if verb == "distinct":
+        _link(data, left, right, facts, real, computed or {})
+    if verb == "distinct" and not (facts.get(tables[0]) or TableFacts({})).keys:  # a declared key has no duplicate rows
         first = data[tables[0]]
         for name in first:
             first[name][-2:] = first[name][:2]  # two rows repeat
@@ -101,27 +109,51 @@ def _arrow(op, columns: dict) -> pa.Table:
     return pa.Table.from_pydict(columns, schema=ibis.schema(op.schema).to_pyarrow())
 
 
-def _recomputed(op, columns: dict) -> dict:
-    """The columns, with each column that a mutate before the table computes from other columns of the table
-    computed again from the generated rows: after `big=_.amount > 200`, a row with amount 250 has big true.
+def _below(op) -> list:
+    """The mutates and the filters before the table that read its own columns, the latest first:
+    ("set", column, value) for a computed column, ("test", None, test) for a test of a filter.
 
     The search goes down through the steps that keep the columns of a row (filter, order_by, limit, mutate),
     and stops at a join or an aggregate. A cast of text is not computed again: generated text does not parse.
     """
-    found, node = {}, op
+    found, node = [], op
     while isinstance(node, (ops.Filter, ops.Sort, ops.Limit, ops.Project)):
-        for name, v in getattr(node, "values", {}).items():
-            fields = v.find(ops.Field, filter=ops.Value)
-            if name in op.schema and name not in found and not isinstance(v, ops.Field) and \
-                    all(f.rel is node.parent and f.name in op.schema for f in fields) and \
-                    not v.find((ops.WindowFunction, ops.Reduction, ops.Cast, ops.TryCast), filter=ops.Value):
-                found[name] = v  # ponytail: matched by name, so a column renamed after the mutate is not followed
+        found += [("set", name, v) for name, v in getattr(node, "values", {}).items()  # ponytail: matched by name,
+                  if name in op.schema and not isinstance(v, ops.Field) and _local(v, node, op)]  # a rename is not followed
+        found += [("test", None, p) for p in getattr(node, "predicates", ()) if _local(p, node, op)]
         node = node.parent
-    for name, v in reversed(found.items()):  # the earliest mutate first: a later one can read its columns
-        mem = ibis.memtable(_arrow(op, columns))
-        expr = v.replace({f.rel: mem.op() for f in v.find(ops.Field, filter=ops.Value)}).to_expr()
-        columns[name] = mem.select(value=expr.cast(op.schema[name])).to_pyarrow()["value"].to_pylist()
-    return columns
+    return found
+
+
+def _local(value, node, op) -> bool:
+    """True when `value` reads columns of the table below `node` that `op` also has, with no window, aggregate or cast."""
+    return all(f.rel is node.parent and f.name in op.schema for f in value.find(ops.Field, filter=ops.Value)) and \
+        not value.find((ops.WindowFunction, ops.Reduction, ops.Cast, ops.TryCast), filter=ops.Value)
+
+
+def _recomputed(op, columns: dict, below: list) -> dict:
+    """The columns, with each column that a mutate before the table computes from other columns of the table
+    computed again from the generated rows, and without the rows that fail a filter before the table:
+    after `big=_.amount > 200`, a row with amount 250 has big true; after `filter(_.big)`, no row has big false.
+
+    Each value and test reads the generated columns, with the formula of each column that an earlier mutate
+    computes in place of the column. Thus one flat query runs them all: a chain of mutates compiles slowly.
+    """
+    if not below:
+        return columns
+    t = ibis.memtable(_arrow(op, columns))
+    values, tests = {}, []
+    for kind, name, v in reversed(below):  # the earliest first: each one reads the columns as the steps before left them
+        value = _substitute(v, {f: values.get(f.name, t[f.name].op()) for f in v.find(ops.Field, filter=ops.Value)})
+        if kind == "set":  # ponytail: a formula that reads a column twice doubles in each later formula that reads it
+            values[name] = value.to_expr().cast(op.schema[name]).op()
+        else:
+            tests.append(value.to_expr())
+    final = {c: values[c].to_expr() if c in values else t[c] for c in op.schema}
+    rows = (t.filter(*tests) if tests else t).select(**final).to_pyarrow()
+    if not rows.num_rows:  # ponytail: no generated row passes the filters; the rows then break them
+        rows = t.select(**final).to_pyarrow()
+    return {c: rows[c].to_pylist() for c in op.schema}
 
 
 # -- what the step does ------------------------------------------------------------------------------
@@ -198,31 +230,40 @@ def _null_columns(step, output) -> set:
 
 
 def _join_keys(output, data: dict) -> list:
-    """((table, column), (table, column)) for each equality of the last join of a join step."""
-    if not isinstance(output, ops.JoinChain) or not output.rest:
+    """((table, column), (table, column)) for each equality of each join of a join step, in the order of the joins.
+
+    A chained join reads new rows for each of its tables, so each join of the chain needs keys that match.
+    """
+    if not isinstance(output, ops.JoinChain):
         return []
-    tables, pairs = list(data), []
-    for p in output.rest[-1].predicates:
-        if isinstance(p, ops.Equals) and isinstance(p.left, ops.Field) and isinstance(p.right, ops.Field):
-            right = p.right.rel.parent if isinstance(p.right.rel, ops.JoinReference) else p.right.rel
-            left = _source(p.left, [t for t in _all_tables(output) if t is not right])
-            if left is not None and right in data:
-                pairs.append((left, (right, p.right.name)))
+    tables, pairs = _all_tables(output), []
+    for k, link in enumerate(output.rest):
+        right = tables[k + 1]
+        for p in link.predicates:
+            if isinstance(p, ops.Equals) and isinstance(p.left, ops.Field) and isinstance(p.right, ops.Field):
+                other, mine = (p.left, p.right) if _rel(p.right) is right else (p.right, p.left)
+                left = _source(other, tables[: k + 1])
+                if left is not None and _rel(mine) is right and right in data:
+                    pairs.append((left, (right, mine.name)))
     return pairs
+
+
+def _rel(field):
+    return field.rel.parent if isinstance(field.rel, ops.JoinReference) else field.rel
 
 
 def _all_tables(chain) -> list:
     return [getattr(t, "parent", t) for t in (chain.first, *(link.table for link in chain.rest))]
 
 
-def _link(data: dict, left, right, facts: dict, real: dict):
+def _link(data: dict, left, right, facts: dict, real: dict, computed: dict):
     """The right key takes every second value of the left key: some rows match, the others do not."""
     table, name = left
     if table in data:
         source = data[table][name]
-    else:  # a table with real data
+    else:  # a table with real data: its computed rows, when the scene has them
         if table not in real:
-            real[table] = table.to_expr().head(ROWS).to_pyarrow()
+            real[table] = _substitute(table, computed).to_expr().head(ROWS).to_pyarrow()
         source = real[table][name].to_pylist()
     values = data[right[0]][right[1]]
     f = facts.get(right[0]) or TableFacts({})

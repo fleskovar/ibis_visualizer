@@ -8,4 +8,5 @@ flavors: [develop]
 - Add each mobject that must stay on the screen to `_persistent()`. Otherwise `_settle` and `_finish` remove it.
 - manim `Text` drops leading spaces. To indent a line, move it by the indent times `_char_width(...)`.
 - End each choreography with `self._settle(...)` and `self.result = <the result grid>`. If a choreography cannot draw a call, raise an exception: `_animate` then draws the step with `_flow`.
+- Run a table on other rows with `_substitute` and `self.computed`, through `_binder`. Do not call `Node.replace` or run a count on the full plan: each query must read the tables of `_materialize`.
 - After a change, render an example with `IBIS_ANIM_QUALITY=low` and look at the frames of its clips.
