@@ -46,4 +46,6 @@ Read [the architecture](./architecture.md) before you change code. It names the 
 3. Save frames of the clips with the frame script of the `ibis-anim` skill, `skills/ibis-anim/frames.py`. This path is relative to the folder of this skill. Give the script the folder `media/videos/480p15/sections`.
 4. Read the PNG files. Check that no text overlaps, that each table stays inside the stage, and that the end state of each step is correct.
 
-Renders of different videos can run in parallel. Each video has its own scene class and its own text cache.
+Renders of different videos can run in parallel. Each video has its own scene class and its own text cache. `python -m ibis_anim dbt MODEL --deps` uses this: each model renders in its own process.
+
+To check a change in a dbt model quickly, render only that model: `IBIS_ANIM_QUALITY=low .venv/Scripts/python -m ibis_anim dbt examples/dbt_shop/models/marts/store_revenue.py`. A change to the code of `ibis_anim` changes the key of each dbt video, so the command renders it again. Add `--force` to render a video again without a change.

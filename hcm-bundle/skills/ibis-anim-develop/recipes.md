@@ -160,6 +160,8 @@ The user guide for the numpy 1.x stack is [the numpy 1.x setup](../ibis-anim/num
 Rules for code that must run on both stacks:
 
 - Use only manim features that manim 0.18.1 has. For example, sections, `tempconfig` and the config key `disable_caching` exist in 0.18.1.
+- A config key that only a newer manim has is safe in `tempconfig`: manim 0.18.1 ignores a key that it does not know. `render` sets `max_inflight_encoders` this way. manim 0.19 and later encode the clip of an animation while the next animation draws.
+- A patch of a manim class must work in 0.18.1. For example, the copy patch of `VMobjectFromSVGPath.__deepcopy__` wraps `Mobject.__deepcopy__`, which has the same code in 0.18.1 and 0.22.
 - Do not use numpy 2 functions, and do not use pyarrow functions newer than pyarrow 14.
 - Do not import a module for the first time inside the render at exit. On Python 3.11, an import that registers a thread hook then raises `can't register atexit after shutdown`. `__init__.py` imports `concurrent.futures.thread` first for this reason, and `test_the_render_at_exit_can_import_a_thread_pool` in `tests/test_tracer.py` checks it. That check fails on Python 3.11 only.
 
@@ -219,7 +221,10 @@ Without FFmpeg, use a test setup:
 
    ```sh
    IBIS_ANIM_QUALITY=low PYTHONPATH=C:/path/to/ibis-anim X:/v/Scripts/python manim018.py C:/path/to/ibis-anim/examples/table_ops.py
+   IBIS_ANIM_QUALITY=low PYTHONPATH=C:/path/to/ibis-anim X:/v/Scripts/python manim018.py dbt C:/path/to/ibis-anim/examples/dbt_shop/models/marts/store_revenue.py
    ```
+
+   Do not use `--deps` with this script. Each model of `--deps` renders in a new process, and a new process does not get the patch of the script. Without `ffprobe`, these processes fail. Render each model with its own command.
 
 For each render, the last line must be `ibis_anim: video at ...`, and no line must say `plain animation` or `Traceback`. Render one example on real data (`table_ops.py`) and one schema-only example (`schema_only.py`). Then compare their frames with a render on the current stack.
 

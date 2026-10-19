@@ -12,10 +12,15 @@ The project is the nearest folder with `dbt_project.yml` above the file of the m
 
 from __future__ import annotations
 
+import hashlib
 import importlib.machinery
 import importlib.util
 import inspect
+import os
 import re
+import sys
+from concurrent.futures import ProcessPoolExecutor
+from importlib.metadata import version
 from pathlib import Path
 
 import ibis
@@ -24,8 +29,10 @@ import yaml
 from ibis.backends.sql.datatypes import DuckDBType
 from sqlglot import exp
 
+from ibis_anim._derive import derive
 from ibis_anim._facts import declare
-from ibis_anim._scope import name_table
+from ibis_anim._scope import name_table, table_names
+from ibis_anim._tracer import trace
 
 MODEL_SUFFIXES = (".ibis", ".py")
 
@@ -39,6 +46,91 @@ def run(func):
     project = Project.of(func)
     name = project.name(func)
     return name_table(project._declare(("ref", name), project.call(func)), name)  # the tests of the model itself
+
+
+def model_file(model: str) -> Path:
+    """The file of a model: a path, or the name of an ibis model in the dbt project of the current folder."""
+    if Path(model).is_file():
+        return Path(model)
+    here = Path.cwd().resolve()
+    root = next((p for p in (here, *here.parents) if (p / "dbt_project.yml").exists()), None)
+    if root is None:
+        sys.exit(f"ibis_anim: no file {model}, and no dbt_project.yml in the current folder or above it")
+    path = Project(root).files.get(model)
+    if path is None or path.suffix not in MODEL_SUFFIXES:
+        sys.exit(f"ibis_anim: no ibis model {model} in {root}")
+    return path
+
+
+def model_steps(path) -> tuple[str, dict[str, list], dict]:
+    """Trace a dbt-ibis model and the models upstream of it, with no video.
+
+    Return the name of the model, the steps of each ibis model (model name → its steps, in the order that the models
+    ran), and the facts of each table of the trace. A step in a helper function belongs to the model that called it.
+    Give the facts to `render` with a part of the steps: `render(by_model[name][:2], "joins", facts=facts)`.
+    """
+    return _trace_models(path)[:3]
+
+
+def _trace_models(path) -> tuple[str, dict[str, list], dict, Project]:
+    """`model_steps`, and the project of the model."""
+    func = load_model(path)
+    _, steps = trace(func)
+    project = Project.of(func)
+    models, by_model = {n for n, p in project.files.items() if p.suffix in MODEL_SUFFIXES}, {}
+    for step in steps:
+        model = next((f.name for f in step.stack if f.name in models), None)
+        if model is not None:
+            by_model.setdefault(model, []).append(step)
+    return func.__name__, by_model, derive(steps, table_names(steps)), project
+
+
+def video_key(by_model: dict, project: Project) -> str:
+    """A hash of each input of the video of a model: the files of the model and of the models upstream of it, the
+    SQL models and the YAML files of the project, the code of ibis_anim, the quality and the manim version. A change
+    in a model downstream of it does not change the key."""
+    files = [project.files[m] for m in by_model] + [p for p in project.files.values() if p.suffix == ".sql"]
+    files += project._yaml_files + sorted(Path(__file__).parent.glob("*.py"))
+    digest = hashlib.sha256(f"{os.environ.get('IBIS_ANIM_QUALITY', 'high')} {version('manim')}".encode())
+    for file in files:
+        digest.update(file.name.encode() + b"\0" + file.read_bytes())
+    return digest.hexdigest()
+
+
+def render_models(path, deps: bool = False, jobs: int | None = None, force: bool = False) -> list[str]:
+    """Render a video of the steps of one model, and return the names of the models that failed.
+
+    The models upstream of it run first, without a video: the facts of its inputs come from their steps. With `deps`,
+    each ibis model of the trace gets its own video, in a process of its own, `jobs` at a time. A video whose inputs
+    did not change since its last render stays, unless `force`.
+    """
+    import ibis_anim  # here: ibis_anim imports this module
+
+    name, by_model, facts, project = _trace_models(path)
+    if not deps:
+        if name not in by_model:
+            print(f"ibis_anim: {name} has no ibis steps")
+            return []
+        video, key_file, key = Path("media", f"{name}.mp4"), Path("media", "keys", f"{name}.sha256"), video_key(by_model, project)
+        # a newer video is not from this key: for example the video of the whole tree, `python -m ibis_anim FILE`
+        if not force and key_file.exists() and video.exists() and key_file.stat().st_mtime >= video.stat().st_mtime \
+                and key_file.read_text() == key:
+            print(f"ibis_anim: {video} is up to date")
+            return []
+        if ibis_anim._render_at_exit(by_model[name], name, facts) is not None:
+            key_file.parent.mkdir(parents=True, exist_ok=True)
+            key_file.write_text(key)
+        return []
+    failed = []
+    # ponytail: each process uses the memory of one render; lower --jobs when a project has many large models.
+    # Each process traces its model again to check its key: about 4 seconds for a video that is up to date.
+    with ProcessPoolExecutor(min(jobs or os.cpu_count() or 1, len(by_model) or 1)) as pool:
+        futures = {model: pool.submit(render_models, project.files[model], force=force) for model in by_model}
+        for model, future in futures.items():
+            if future.exception() is not None:
+                print(f"ibis_anim: no video for {model}: {future.exception()!r}", file=sys.stderr)
+                failed.append(model)
+    return failed
 
 
 def load_model(path, name: str | None = None):
@@ -75,6 +167,7 @@ def _dtype(text: str):
 class Project:
     def __init__(self, root: Path):
         self.root, self.files, self.schemas, self.tables, self.tests = root, {}, {}, {}, {}
+        self._yaml_files = []  # a part of the key of each video: their schemas and tests are facts
         config_file = root / "dbt_project.yml"
         config = yaml.safe_load(config_file.read_text()) if config_file.exists() else {}
         folders = [root / p for p in (config or {}).get("model-paths", ["models"])] + [root / p for p in (config or {}).get("seed-paths", ["seeds"])]
@@ -94,6 +187,7 @@ class Project:
         return cls(root)
 
     def _read_yaml(self, path: Path):
+        self._yaml_files.append(path)
         doc = yaml.safe_load(path.read_text()) or {}
         for kind in ("models", "seeds", "snapshots"):
             for node in doc.get(kind) or []:

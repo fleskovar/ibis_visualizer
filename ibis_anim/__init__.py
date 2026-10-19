@@ -18,12 +18,14 @@ from ibis import *  # noqa: F403
 
 from ibis_anim import _derive, _tracer
 from ibis_anim._dbt import load_model as load_dbt_model
+from ibis_anim._dbt import model_steps
 from ibis_anim._facts import declare
 from ibis_anim._scope import table_names
 from ibis_anim._scene import render, visualize
 from ibis_anim._tracer import Step, install, recording, trace
 
-__all__ = [*ibis.__all__, "Step", "declare", "load_dbt_model", "recording", "render", "report", "trace", "visualize"]
+__all__ = [*ibis.__all__, "Step", "declare", "load_dbt_model", "model_steps", "recording", "render", "report", "trace",
+           "visualize"]
 
 
 def report(func, *args, **kwargs) -> str:
@@ -58,13 +60,19 @@ class _SubmoduleAlias(importlib.abc.MetaPathFinder, importlib.abc.Loader):
         module.__spec__ = module.__spec__.loader_state  # the import system replaced the spec of the real module
 
 
-def _render_at_exit(steps: list[Step], name: str | None = None):
+def _render_at_exit(steps: list[Step], name: str | None = None, facts: dict | None = None) -> Path | None:
+    """Print the warnings of the steps, render them and return the video. `facts` come from a larger trace, else from
+    the steps."""
     if steps and os.environ.get("IBIS_ANIM", "1") != "0":
         names = table_names(steps)
-        for line in _derive.report(steps, _derive.derive(steps, names), names).splitlines():
+        facts = _derive.derive(steps, names) if facts is None else facts
+        for line in _derive.report(steps, facts, names).splitlines():
             if "⚠" in line:
                 print(f"ibis_anim: {line.strip()}")
-        print(f"ibis_anim: video at {render(steps, name or Path(sys.argv[0]).stem or 'ibis_anim')}")
+        video = render(steps, name or Path(sys.argv[0]).stem or "ibis_anim", facts=facts)
+        print(f"ibis_anim: video at {video}")
+        return video
+    return None
 
 
 sys.meta_path.insert(0, _SubmoduleAlias())

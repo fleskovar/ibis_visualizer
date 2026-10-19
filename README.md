@@ -17,8 +17,12 @@ To keep the code unchanged (`import ibis`), run it through `ibis_anim` instead:
 ```sh
 python -m ibis_anim my_script.py [ARGS...]         # the whole script; the video is media/my_script.mp4
 python -m ibis_anim my_script.py:pipeline          # one function, called without arguments; media/pipeline.mp4
-python -m ibis_anim models/marts/store_revenue.py  # a dbt-ibis model and the models upstream of it
-``` There is also one clip per step in `media/videos/<resolution>/sections/`.
+python -m ibis_anim models/marts/store_revenue.py  # a dbt-ibis model and the models upstream of it, in one video
+python -m ibis_anim dbt store_revenue              # the steps of one dbt-ibis model only; faster
+python -m ibis_anim dbt store_revenue --deps       # one video for that model and one for each ibis model upstream of it
+```
+
+There is also one clip per step in `media/videos/<resolution>/sections/`. To render a part of a dbt-ibis pipeline, see [Choose what to render](#choose-what-to-render).
 
 The videos are 1080p at 30 frames per second. For faster renders, set `IBIS_ANIM_QUALITY=medium` (720p) or `low` (480p), or pass `quality=` to `ibis_anim.render`. A 1080p render takes about 2.5 times as long as a 480p render.
 
@@ -155,6 +159,132 @@ From Python, pass the `model` function, which has `@depends_on(...)`, without ar
 - The dbt tests of the columns in the YAML (`unique`, `not_null`, `accepted_values`, and the constraints `primary_key` and `not_null`) are facts about the table. dbt checks them at each build. This also applies to ibis models: a test on `stg_stores.store_id` keeps the column unique after a cast.
 - Not yet: `relationships` tests, and SQL models with `SELECT *` and no columns in the YAML.
 
+### Choose what to render
+
+The video of a model file shows each model upstream of it too, so a model deep in the project takes a long time. The time goes into the drawing of the steps. The trace and the facts take less than a second. Render only the part of the pipeline that you want to see. The examples use `examples/dbt_shop`, where `store_revenue` reads `stg_orders`, `usa_stores` (which reads `stg_stores`) and the SQL model `stg_customers`:
+
+| To see | Run | Result |
+| --- | --- | --- |
+| The whole tree in one video | `python -m ibis_anim models/marts/store_revenue.py` | `media/store_revenue.mp4`, with the 7 steps of the 4 models |
+| One model | `python -m ibis_anim dbt store_revenue` | `media/store_revenue.mp4`, with the 3 steps of `store_revenue` only |
+| One model, and each model upstream of it in a video of its own | `python -m ibis_anim dbt store_revenue --deps` | `media/store_revenue.mp4`, `media/stg_orders.mp4`, `media/stg_stores.mp4`, `media/usa_stores.mp4` |
+| One step of a video | Open the clip of the step after a render | `media/videos/<resolution>/sections/store_revenue_0002_02_store_revenue_join.mp4` |
+| Some steps of a model, or the steps of some models in one video | Python, see [Render a block of steps](#render-a-block-of-steps) | `media/<name>.mp4` |
+| A large project, in small videos | The rows above, in order: see [Render a large project in chunks](#render-a-large-project-in-chunks) | one video for each model or block |
+
+### The dbt command
+
+```sh
+python -m ibis_anim dbt MODEL [--deps] [--jobs N] [--force]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `MODEL` | The file of the model (`.py` or `.ibis`), or its name. For a name, the project is the nearest folder with `dbt_project.yml` at or above the current folder. |
+| `--deps` | Also render a video for each ibis model upstream of `MODEL`, each in a process of its own. |
+| `--jobs N` | With `--deps`, render at most `N` videos at the same time. The default is the number of CPUs. |
+| `--force` | Render each video again, also when its inputs did not change. |
+
+```sh
+python -m ibis_anim dbt models/marts/store_revenue.py  # a file
+python -m ibis_anim dbt store_revenue                  # a name, from a folder of the project
+python -m ibis_anim dbt store_revenue --deps --jobs 2  # 4 videos, 2 at the same time
+IBIS_ANIM_QUALITY=low python -m ibis_anim dbt usa_stores --force  # a quick check, rendered again
+```
+
+- The models upstream of the model run first, without a video. The facts of its inputs come from their steps, for example `country = USA` after the filter of `usa_stores`. The YAML schemas alone do not give these facts.
+- The program graph of the video shows the model and the tables that it reads.
+- With `--deps`, each ibis model in the trace gets its own video, in a process of its own. A SQL model or a source has no steps, so it gets no video. When the video of a model fails, the other videos continue, and the command names the models that failed.
+- A step in a helper function belongs to the model that called it.
+- Each process uses the memory of one render. For a project with many large models, use a lower `--jobs`.
+- A video renders again only when one of its inputs changes. The key of a video is `media/keys/<model>.sha256`. It is a hash of:
+  - the files of the model and of the models upstream of it,
+  - the SQL models and the YAML files of the project,
+  - the code of ibis_anim, the quality and the manim version.
+
+  A change in a model downstream of the model does not change its key. When a video did not change, the command writes `media/<model>.mp4 is up to date`. To render the videos again, add `--force`. When another render writes the video later, for example `python -m ibis_anim FILE`, the next `dbt` command renders the video again.
+- If `IBIS_ANIM=0`, the command renders nothing and writes no key.
+
+### Render a block of steps
+
+To render some steps of a model, or the steps of some models in one video, call `ibis_anim.model_steps(path)`. It traces the model and the models upstream of it, with no video, and returns `(name, by_model, facts)`: the name of the model, the steps of each ibis model, and the facts of each table of the trace. Give some of the steps to `ibis_anim.render`, with the facts:
+
+```python
+import ibis_anim
+
+name, by_model, facts = ibis_anim.model_steps("models/marts/store_revenue.py")  # a trace, no video
+# by_model: model name → its steps, in the order that they ran
+# {'stg_orders': [filter, mutate], 'stg_stores': [mutate], 'usa_stores': [filter], 'store_revenue': [join, join, aggregate]}
+
+steps = by_model["store_revenue"]
+ibis_anim.render(steps[:2], "store_revenue_joins", facts=facts)                       # the 2 joins only
+ibis_anim.render(by_model["stg_stores"] + by_model["usa_stores"], "stores", facts=facts)  # 2 models in one video
+```
+
+- Always give `facts=facts`. Without it, the facts come from the given steps only. Then each input of the first step is a source with no facts, and the generated rows ignore the filters before it.
+- The steps of a video count from 1. The trace and the program graph show the given steps only.
+- `render` renders also when `IBIS_ANIM=0`, and it writes no key.
+
+### Render a large project in chunks
+
+A render takes about 20 seconds for each step at `low`, and about 2.5 times as long at `high`. Thus one video of a project with 100 steps takes more than half an hour at `low`. Do not render a large project in one video. Render it in chunks: one video for each model, and one video for each block of steps of a large model.
+
+The script [`hcm-bundle/skills/ibis-anim/chunks.py`](hcm-bundle/skills/ibis-anim/chunks.py) lists the models and their steps, and renders a model in blocks of steps. It uses `ibis_anim.model_steps` and `ibis_anim.render`, as in [Render a block of steps](#render-a-block-of-steps). Run each command from a folder of the dbt project:
+
+1. List the models of the trace and their steps. This renders nothing and takes a few seconds:
+
+   ```sh
+   IBIS_ANIM=0 python chunks.py models/marts/store_revenue.py
+   ```
+
+   ```
+   stg_orders: 2 steps: filter, mutate
+   stg_stores: 1 step: mutate
+   usa_stores: 1 step: filter
+   store_revenue: 3 steps: join, join, group_by → aggregate
+   ```
+
+   The models are in the order that they ran. SQL models, seeds and sources have no steps, so they are not in the list. Multiply the steps of a model by 20 seconds to get its render time at `low`.
+
+2. Render one model at `low` to check it: `IBIS_ANIM_QUALITY=low python -m ibis_anim dbt store_revenue`.
+
+3. Render each model of the tree at `low`, each model in its own video and its own process:
+
+   ```sh
+   IBIS_ANIM_QUALITY=low python -m ibis_anim dbt store_revenue --deps --jobs 4
+   ```
+
+   With enough jobs, the time is about the time of the largest model. If a model fails, the other models continue. Correct the model and run the same command again: only the models that failed or changed render again.
+
+4. If a model has more than about 10 steps, render it in blocks of steps:
+
+   ```sh
+   IBIS_ANIM_QUALITY=low python chunks.py models/marts/store_revenue.py --size 5
+   IBIS_ANIM_QUALITY=low python chunks.py models/marts/store_revenue.py --size 5 --model stg_orders   # a model upstream of it
+   ```
+
+   The videos are `media/store_revenue_part1.mp4`, `media/store_revenue_part2.mp4` and so on. Each part has the facts of the whole trace. The step counter and the clip names of each part start at 1.
+
+5. Render the final videos at `high`: `python -m ibis_anim dbt store_revenue --deps`. Render the final blocks with `chunks.py` and no `IBIS_ANIM_QUALITY`.
+
+Rules for chunks:
+
+- The key of a video includes the quality. Thus the render at `high` renders each video again, and it replaces the `low` video in `media/<model>.mp4`. The key file keeps the last key only, so the next render at `low` renders each video again too.
+- `chunks.py` writes no key. Each run renders each part again.
+- Each process of `--deps` uses the memory of one render. If the computer runs out of memory, use a lower `--jobs`.
+
+### Render time
+
+The times are for `examples/dbt_shop` at `IBIS_ANIM_QUALITY=low`, on 12 CPUs:
+
+| Run | Time |
+| --- | --- |
+| `python -m ibis_anim models/marts/store_revenue.py`, the whole tree | about 130 seconds |
+| `python -m ibis_anim dbt store_revenue` | about 65 seconds |
+| `python -m ibis_anim dbt store_revenue --deps`, 4 videos | about 80 seconds |
+| The same command, when no input changed | about 9 seconds |
+| `--deps` after a change to `store_revenue` only | about 70 seconds: only `store_revenue` renders |
+
 See `examples/dbt_shop/`. Install the extra with `pip install ibis-anim[dbt]`.
 
 ## Use
@@ -168,6 +298,7 @@ python examples/customer_health.py   # a realistic job: 5 tables, chains, a loop
 python examples/conditions.py        # ibis.and_ and ibis.or_ in filters, ibis.ifelse in new columns
 python examples/schema_only.py       # schemas only, no data: the video uses generated rows
 python -m ibis_anim examples/dbt_shop/models/marts/store_revenue.py  # a dbt-ibis model and the models upstream of it
+python -m ibis_anim dbt examples/dbt_shop/models/marts/store_revenue.py --deps  # one video for each model
 IBIS_ANIM=0 python my_script.py      # run without the video
 python tests/test_tracer.py          # checks of the tracer
 python tests/test_scope.py           # checks of the tables panel plan
@@ -175,6 +306,7 @@ python tests/test_facts.py           # checks of the facts and warnings
 python tests/test_conditions.py      # checks of the conditions of filters and ifelse
 python tests/test_samples.py         # checks of the generated rows
 python tests/test_dbt.py             # checks of dbt-ibis models
+python tests/test_scene.py           # checks of the drawing
 ```
 
 To render one function only, call `ibis_anim.visualize(func, *args)`. To get the steps without a video, call `ibis_anim.trace(func, *args)`.

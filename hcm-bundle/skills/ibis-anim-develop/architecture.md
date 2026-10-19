@@ -21,7 +21,7 @@ user code ─► wrapped methods ─► list[Step] ─┬─► table_names ─�
 | Block | File and function | Reads | Gives | Test file |
 | --- | --- | --- | --- | --- |
 | Drop-in front | `__init__.py` | the `ibis` module | the same names and submodules as `ibis` | `test_tracer.py` |
-| Command line | `__main__.py`, `main` | a file path | a video | |
+| Command line | `__main__.py`, `main`, `dbt` | a file path, or `dbt` and a model | a video | `test_dbt.py` |
 | Method wrapper | `_tracer.py`, `install`, `_wrap`, `_make_step` | ibis calls | `Step` | `test_tracer.py` |
 | Frame inspection | `_tracer.py`, `_user_frames`, `_label`, `_call_source` | Python frames | `Step.stack`, `labels`, `code` | `test_tracer.py` |
 | Column steps | `_tracer.py`, `_named_columns`, `_assignment` | the source of the calling function, through `ast` | `column` steps | `test_tracer.py` |
@@ -31,6 +31,7 @@ user code ─► wrapped methods ─► list[Step] ─┬─► table_names ─�
 | Facts rules | `_derive.py`, `derive`, `_step`, `_select`, `_expr` | steps, names, input facts | op → `TableFacts` | `test_facts.py`, `test_conditions.py` |
 | Sample rows | `_samples.py`, `for_step`, `_below`, `_recomputed`, `_join_keys` | one step, facts | rows for each schema-only table that the step reads | `test_samples.py` |
 | dbt loader | `_dbt.py`, `run`, `Project` | a dbt project | input tables, declarations | `test_dbt.py` |
+| dbt videos | `_dbt.py`, `model_file`, `model_steps`, `video_key`, `render_models` | a model file or name | one video for each model, a key for each video | `test_dbt.py` |
 | Computed steps | `_scene.py`, `_materialize` | steps | op → a DuckDB temporary table of its rows | `test_materialize.py` |
 | Re-run | `_scene.py`, `_binder`, `_run_on_samples` | a step, generated rows, computed tables | `Sample` for each input and for the output | `test_materialize.py` |
 | Scene | `_scene.py`, `DebuggerScene` | all of the above | a video | render and frames |
@@ -61,6 +62,9 @@ Each test file is in the `tests/` folder of the clone.
 - **Memtables copy their rows.** An arrow table from DuckDB keeps its DuckDB buffers, about 8 MB for each column. ibis keeps each memtable until exit. `_scene._memtable` copies the rows, so a long pipeline on a wide table does not run out of DuckDB memory.
 - **Rows for each step.** `for_step` makes new rows for each step on a schema-only table, from the facts of the inputs and the arguments of the step. `_recomputed` computes the columns of earlier mutates again and drops the rows that fail earlier filters, in one flat query. `_join_keys` links the keys of each join of a chained join.
 - **Facts read SQL.** `_derive._step` compiles each step to DuckDB SQL with placeholder inputs. sqlglot qualifies the SQL, so each column names its source. Then one rule for each SQL form computes the output facts: `FROM`, `JOIN`, `WHERE`, `GROUP BY`, the projection, `DISTINCT`, `LIMIT` and the set operations.
+- **One video for each dbt model.** `model_steps` traces a model and the models upstream of it, groups the steps by model and derives the facts of the whole trace. It is public (`ibis_anim.model_steps`) and returns `(name, by_model, facts)`. `_trace_models` also returns the `Project`, for `render_models` and `video_key`: `Project` is not public. A step belongs to the first frame of its stack that has the name of a model, so the steps of a helper function belong to the model that called it. `render_models` renders only the steps of the model, with `render(..., facts=...)`. Thus the inputs of the model keep the facts of the upstream steps, for example `country = USA` after a filter. The facts of a slice of steps alone treat each input as a source and lose these facts. With `--deps`, `render_models` runs itself in a `ProcessPoolExecutor`, once for each model of the trace.
+- **The key of a dbt video.** `video_key` hashes the file of the model and the files of the models upstream of it, the SQL models, the YAML files (`Project._yaml_files`), the `ibis_anim` source files, the quality and the manim version. The key goes to `media/keys/<model>.sha256` after a render. `render_models` skips a model when the key is the same and the key file is newer than the video. A change to any file of `ibis_anim` renders each dbt video again.
+- **Copies of glyphs share their path.** manim copies each mobject at the start of each animation, and its SVG cache copies each repeated text. Each glyph of a `Text` keeps its svgelements `path_obj`, and a deep copy of it was about 90% of the cost of a copy. manim reads `path_obj` only in `__init__`. Thus `_scene.py` patches `VMobjectFromSVGPath.__deepcopy__` so that a copy keeps the path of the original. This cut a render by about 25%, with the same frames. `test_scene.py` checks it.
 - **Each choreography has a fallback.** `DebuggerScene._animate` sends a step to the method of its verb. If that method raises an exception, `_flow` draws the step and stderr shows `plain animation`.
 
 ## The scene loop

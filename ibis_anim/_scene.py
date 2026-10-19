@@ -30,6 +30,7 @@ from manim import (
     Rectangle, ReplacementTransform, Rotate, RoundedRectangle, Succession, Scene, SurroundingRectangle, Text, Transform, TransformFromCopy, VectorizedPoint, VGroup,
     tempconfig,
 )
+from manim.mobject.svg.svg_mobject import VMobjectFromSVGPath
 
 from ibis_anim._derive import _substitute, column_text, derive
 from ibis_anim._samples import for_step, needs_rows
@@ -66,6 +67,23 @@ CAPTION = "#8fd3ff"
 PALETTE = [BLUE_D, ORANGE, PURPLE_B, GREEN_D, TEAL_D, MAROON_C, GOLD_D, PINK]
 
 
+def _share_glyph_path(copy_glyph):
+    """A copy of a glyph of a Text keeps the svgelements path of the original. manim reads the path only to make the
+    points, in __init__, and a deep copy of the path costs about 90% of the copy of a Text. Each animation copies its
+    mobjects, and the SVG cache copies each repeated text."""
+    def copy(self, memo):
+        path = getattr(self, "path_obj", None)
+        if path is not None:
+            memo[id(path)] = path
+        return copy_glyph(self, memo)
+    copy._ibis_anim = True
+    return copy
+
+
+if not getattr(VMobjectFromSVGPath.__deepcopy__, "_ibis_anim", False):
+    VMobjectFromSVGPath.__deepcopy__ = _share_glyph_path(VMobjectFromSVGPath.__deepcopy__)
+
+
 def visualize(func, *args, **kwargs) -> Path:
     """Trace `func(*args, **kwargs)` and render its steps."""
     _, steps = trace(func, *args, **kwargs)
@@ -75,20 +93,22 @@ def visualize(func, *args, **kwargs) -> Path:
 QUALITIES = {"low": (854, 480, 15), "medium": (1280, 720, 30), "high": (1920, 1080, 30)}  # width, height, frames per second
 
 
-def render(steps: list[Step], name: str, output_dir="media", quality: str | None = None) -> Path:
+def render(steps: list[Step], name: str, output_dir="media", quality: str | None = None, facts: dict | None = None) -> Path:
     """Render one video with one section per step. The video goes to `<output_dir>/<name>.mp4`.
 
     `quality` is low (480p), medium (720p) or high (1080p, the default), or the IBIS_ANIM_QUALITY variable.
+    `facts` are the facts of a larger trace, for example the models upstream of a dbt model; else they come from `steps`.
     """
     width, height, fps = QUALITIES[quality or os.environ.get("IBIS_ANIM_QUALITY", "high")]
     config = {"pixel_width": width, "pixel_height": height, "frame_rate": fps, "media_dir": str(output_dir),
               "save_sections": True, "output_file": name, "verbosity": "WARNING", "progress_bar": "none",
               "text_dir": str(Path(output_dir) / "texts" / name),  # a text cache per video: renders side by side do not race
+              "max_inflight_encoders": 4,  # encode the clip of an animation while the next one draws
               "disable_caching": True}  # the cache hashes each mobject at each play, about half of the render; old clips go anyway
     # manim keeps partial files in a folder named after the scene class: one class per video, so that renders can run side by side
     scene_class = type(re.sub(r"\W", "_", name) or "Video", (DebuggerScene,), {})
     with recording(None), tempconfig(config):  # the previews run ibis methods: do not record them
-        scene = scene_class(steps, title=name)
+        scene = scene_class(steps, title=name, facts=facts)
         clips = Path(scene.renderer.file_writer.sections_output_dir)
         for old in clips.glob(f"{name}_*.mp4"):  # manim keeps the clips of earlier renders: only this render's clips stay
             if re.fullmatch(rf"{re.escape(name)}_\d{{4}}_.*\.mp4", old.name):
@@ -617,11 +637,11 @@ class DebuggerScene(Scene):
     """A debugger view: the trace on the left, the current statement on top, the step in the middle,
     and the tables in scope on a shelf at the bottom."""
 
-    def __init__(self, steps: list[Step], title: str, **kwargs):
+    def __init__(self, steps: list[Step], title: str, facts: dict | None = None, **kwargs):
         self.steps, self.title = steps, title
         self.frames, self.names = plan(steps), table_names(steps)
         try:
-            self.facts = derive(steps, self.names)
+            self.facts = derive(steps, self.names) if facts is None else facts
         except Exception as exc:  # the video works without facts
             print(f"ibis_anim: no facts ({exc!r})", file=sys.stderr)
             self.facts = {}
