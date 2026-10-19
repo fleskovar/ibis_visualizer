@@ -22,6 +22,12 @@ python -m ibis_anim models/marts/store_revenue.py  # a dbt-ibis model and the mo
 
 The videos are 1080p at 30 frames per second. For faster renders, set `IBIS_ANIM_QUALITY=medium` (720p) or `low` (480p), or pass `quality=` to `ibis_anim.render`. A 1080p render takes about 2.5 times as long as a 480p render.
 
+## Requirements
+
+- Python 3.11 or later, `ibis-framework[duckdb]` 10 or later, and manim 0.18.1 or later.
+- manim 0.19 and later need numpy 2. pyarrow before 16, for example pyarrow 14, needs numpy 1.x, but it does not declare this limit. For such a project, use Python 3.11 or 3.12, and add `numpy<2` to the requirements of the project. pip then installs manim 0.18.1, the last version that allows numpy 1.x. Without `numpy<2`, pip installs numpy 2 and manim 0.22, and pyarrow 14 fails. The tests pass with pyarrow 14.0.2, numpy 1.26.4 and manim 0.18.1.
+- manim 0.18 writes the video with the `ffmpeg` and `ffprobe` programs. Install FFmpeg and put it on the PATH. manim 0.19 and later need no FFmpeg program.
+
 ## How it works
 
 1. On import, `ibis_anim` wraps the methods of `ibis.Table` and `GroupedTable` (`filter`, `mutate`, `join`, `aggregate`, `pivot_wider`, ...).

@@ -1,5 +1,10 @@
 """Checks for the drop-in module and the tracer. Run with `python tests/test_tracer.py` or pytest."""
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import ibis
 
 import ibis_anim
@@ -54,9 +59,19 @@ def test_drop_in_exposes_ibis():
     assert ibis_anim.Table is ibis.Table and ibis_anim.memtable is ibis.memtable
 
 
+def test_the_render_at_exit_can_import_a_thread_pool():
+    """The video renders at exit. There, pyarrow 14 imports pandas, and pandas imports concurrent.futures.thread.
+    On Python 3.11, that first import raises after the interpreter starts to shut down. Python 3.14 allows it."""
+    code = "import atexit, ibis_anim\natexit.register(lambda: print(__import__('concurrent.futures.thread').__name__))"
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=Path(__file__).parent.parent,
+                          env={**os.environ, "IBIS_ANIM": "0"})
+    assert done.stdout.strip() == "concurrent", done.stderr
+
+
 if __name__ == "__main__":
     test_trace_records_the_path_that_ran()
     test_methods_called_on_a_join_are_recorded()
     test_columns_built_outside_a_table_call_are_steps()
     test_drop_in_exposes_ibis()
+    test_the_render_at_exit_can_import_a_thread_pool()
     print("ok")

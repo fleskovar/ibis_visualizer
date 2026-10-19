@@ -5,6 +5,7 @@ manim video of each ibis step goes to `media/`. Set `IBIS_ANIM=0` to run without
 """
 
 import atexit
+import concurrent.futures.thread  # noqa: F401  the video renders at exit, where a first import of it raises: pyarrow 14 imports pandas, which imports it
 import importlib
 import importlib.abc
 import importlib.util

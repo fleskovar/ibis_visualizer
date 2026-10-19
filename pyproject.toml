@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "ibis-framework[duckdb]>=10",
-    "manim>=0.19",
+    # 0.18.1 is the last manim that allows numpy 1.x, which pyarrow before 16 needs (Python 3.11 or 3.12 only).
+    # manim 0.18 writes video with the ffmpeg and ffprobe programs: they must be on the PATH.
+    "manim>=0.18.1",
     "portion>=2.4",
     "pyyaml>=6",
     # _derive.py uses sqlglot itself. From 30.18, sqlglot.Drop has no `this`: ibis 12 then writes a DROP without
