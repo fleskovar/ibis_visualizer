@@ -31,7 +31,7 @@ from manim import (
 )
 
 from ibis_anim._derive import column_text, derive
-from ibis_anim._samples import bind, generate
+from ibis_anim._samples import for_step, needs_rows
 from ibis_anim._scope import ScopeFrame, calls, chains, plan, table_names
 from ibis_anim._tracer import Step, _names, recording, trace
 
@@ -114,6 +114,7 @@ class Sample:
     source: object = None  # the op of the input table, to find its card on the panel
     facts: dict = field(default_factory=dict)  # column name → derived facts, for example 'unique · not null'
     changed: frozenset = frozenset()  # columns whose facts this step changed
+    generated: bool = False  # True when the rows were made up for this step: the table has a schema only
 
 
 def _count(table) -> int:
@@ -124,33 +125,49 @@ def _types(table) -> dict[str, str]:
     return {name: str(dtype).lstrip("!") for name, dtype in table.schema().items()}
 
 
-def _run_on_samples(step: Step, given: dict | None = None, bind=lambda t: t):
+def _memtable(rows: pa.Table, schema):
+    mem = ibis.memtable(rows)
+    return (mem if mem.schema() == schema else mem.cast(schema)).op()
+
+
+def _binder(given: dict):
+    """The tables of `given` as memtables, and a function that runs a table on them: a table with a schema only
+    reads its generated rows."""
+    mapping = {op: _memtable(rows, op.schema) for op, (rows, _) in given.items()}
+    return mapping, lambda table: table.op().replace(mapping).to_expr() if mapping else table
+
+
+def _run_on_samples(step: Step, given: dict | None = None):
     """The first rows of each input, the output of the step on these rows only, and the output rows as arrow.
 
-    `given` maps an input op to (arrow rows, partial): in a chain, a step reads the rows that the step
-    before it showed, not a new sample of the full table.
+    `given` maps a table op to (arrow rows, partial): the rows that `for_step` generated for a table with a
+    schema only, or in a chain, the rows that the step before it showed (not a new sample of the full table).
     """
-    given = given or {}  # `bind` runs a table on generated rows when its sources have a schema only
-    arrows = [given[t.op()][0] if t.op() in given else bind(t).head(PREVIEW_ROWS).to_pyarrow() for t in step.inputs]
-    mapping = {}
-    for t, a in zip(step.inputs, arrows):
-        mem = ibis.memtable(a)
-        mapping[t.op()] = (mem if mem.schema() == t.schema() else mem.cast(t.schema())).op()
-    ins = [Sample(label, t.columns, a.to_pylist(), _count(bind(t)), partial=t.op() in given and given[t.op()][1],
-                  types=_types(t), source=t.op())
+    given = given or {}
+    mapping, run = _binder(given)  # a chained join reads the tables of the joins before it: they run on their given rows too
+    arrows = [given[t.op()][0] if t.op() in given else run(t).head(PREVIEW_ROWS).to_pyarrow() for t in step.inputs]
+    mapping = mapping | {t.op(): _memtable(a, t.schema()) for t, a in zip(step.inputs, arrows)}
+    ins = [Sample(label, t.columns, a.to_pylist(), _count(run(t)), partial=t.op() in given and given[t.op()][1],
+                  types=_types(t), source=t.op(), generated=needs_rows(t))
            for t, label, a in zip(step.inputs, step.labels, arrows)]
-    result = bind(step.output.op().replace(mapping).to_expr()).to_pyarrow()  # a chained join also reads earlier sources
+    result = step.output.op().replace(mapping).to_expr().to_pyarrow()
     partial = any(s.partial or len(s.rows) < s.total for s in ins)
-    out = Sample("result", step.output.columns, result.to_pylist(), _count(bind(step.output)), partial, _types(step.output))
+    out = Sample("result", step.output.columns, result.to_pylist(), _count(run(step.output)), partial, _types(step.output),
+                 generated=needs_rows(step.output))
     return ins, out, result.slice(0, MAX_RESULT_ROWS)
 
 
-def _plain_samples(step: Step, bind=lambda t: t) -> tuple[list[Sample], Sample]:
-    ins = [Sample(label, t.columns, bind(t).head(PREVIEW_ROWS).to_pyarrow().to_pylist(), _count(bind(t)), types=_types(t),
-                  source=t.op()) for t, label in zip(step.inputs, step.labels)]
-    out = step.output
-    return ins, Sample("result", out.columns, bind(out).head(PREVIEW_ROWS).to_pyarrow().to_pylist(), _count(bind(out)),
-                       types=_types(out))
+def _plain_samples(step: Step, given: dict | None = None) -> tuple[list[Sample], Sample]:
+    run = _binder(given or {})[1]
+
+    def sample(label, t):
+        try:
+            return Sample(label, t.columns, run(t).head(PREVIEW_ROWS).to_pyarrow().to_pylist(), _count(run(t)), types=_types(t),
+                          source=t.op(), generated=needs_rows(t))
+        except Exception:  # a table with a schema only and no generated rows: its schema only
+            return Sample(label, t.columns, [], 0, types=_types(t), source=t.op(), generated=True)
+
+    return [sample(label, t) for t, label in zip(step.inputs, step.labels)], sample("result", step.output)
 
 
 def _match(outs: list[dict], ins: list[dict], pairs, reuse=False) -> list[int | None]:
@@ -450,7 +467,9 @@ class Grid(VGroup):
                     self.cells[r, name][0].set_fill(_color(colors, tuple(row.get(k) for k in keys)), 0.45)
         self.anchors = VGroup(VectorizedPoint([0, ROW_H / 2, 0]), VectorizedPoint([width, -ROW_H / 2, 0]))
         shown_rows = len(sample.rows)
-        if sample.partial:
+        if sample.generated:  # a table with a schema only has no row count
+            caption = f"{sample.label} · {f'{shown_rows} generated rows' if shown_rows else 'schema only'}"
+        elif sample.partial:
             caption = f"{sample.label} of the rows shown · {sample.total} rows in full"
         elif shown_rows < sample.total:
             caption = f"{sample.label} · first {shown_rows} of {sample.total} rows"
@@ -576,7 +595,7 @@ class DebuggerScene(Scene):
         except Exception as exc:  # the video works without facts
             print(f"ibis_anim: no facts ({exc!r})", file=sys.stderr)
             self.facts = {}
-        self.bind = bind(generate(steps, self.names, self.facts))  # sample rows for tables with a schema only
+        self.made = {}  # table op → the rows that a step generated for it or computed from generated rows
         self.columns_from = {s.output.op(): s.labels[0] for s in steps if s.op == "column"}
         self.chain_of = {i: run for run in chains(steps, self.names) for i in run}
         self.chrome = self.caption = self.trace_panel = self.dag_panel = self.result = self.carry = self.carry_op = None
@@ -819,8 +838,10 @@ class DebuggerScene(Scene):
         self.chrome, self.trace_panel, self.dag_panel = chrome, trace, dag
 
     def _card(self, key) -> Card:
-        if key not in self.rows:
-            table = self.bind(key.to_expr())
+        if key not in self.rows and needs_rows(key):  # a schema only: the rows that a step made for it, if any
+            self.rows[key], self.previews[key] = "?", self.made.get(key, [])[:3]
+        elif key not in self.rows:
+            table = key.to_expr()
             self.rows[key] = _count(table)
             self.previews[key] = table.head(3).to_pyarrow().to_pylist()
         facts = self.facts.get(key)
@@ -1099,15 +1120,21 @@ class DebuggerScene(Scene):
             self._columns if verb in ("mutate", "select", "drop", "rename", "relocate", "cast", "try_cast", "column") else
             self._flow
         )
-        try:
-            ins, out, rows = _run_on_samples(step, self.chain_rows, self.bind)
+        given = self.chain_rows
+        try:  # a step that reads a table with a schema only gets its own rows, not the rows of the chain
+            given = {op: (rows, False) for op, rows in for_step(step, self.facts).items()} or given
+            ins, out, rows = _run_on_samples(step, given)
             self.next_rows = {step.output.op(): (rows, out.partial)}  # for the next step, if it continues the chain
+            if out.generated:  # for the card of the result
+                self.made[step.output.op()] = out.rows
+            if out.generated and not out.rows and not any(s.rows for s in ins):
+                self._say("the step casts text: the video shows the types only, as no generated text is sure to parse")
             handler(step, *self._with_facts(step, ins, out))
         except Exception as exc:  # ponytail: an op shape that a choreography does not handle gets the plain flow
             self.next_rows = {}
             print(f"ibis_anim: plain animation for step {step.op} ({exc!r})", file=sys.stderr)
             self._settle()
-            self._flow(step, *self._named(step, *_plain_samples(step, self.bind)))
+            self._flow(step, *self._named(step, *_plain_samples(step, given)))
 
     # -- choreographies ----------------------------------------------------------------------
 
@@ -1565,7 +1592,7 @@ class DebuggerScene(Scene):
             elif groups:
                 self._say("the same thing happens on every row", wait=0)
                 self._fly(groups, run_time=1.4 + 0.35 * len(groups), lag_ratio=0.3)
-            else:
+            elif out.rows:  # a cast of text on a schema only has no rows: the type change follows
                 self.play(*[FadeIn(res.cell(k, name)) for k in range(len(out.rows))])
             if (inplace or reshape) and name in in_shown:
                 self.remove(*inp.column(name, header=False))

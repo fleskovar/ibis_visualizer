@@ -1,8 +1,8 @@
 """A pipeline written against schemas only: there is no data at all.
 
 The tables are `ibis.table(schema, name=...)`. To render the video, ibis_anim generates a few rows
-for each table from the types of its columns and from the code: join keys that only partly match,
-the literals of the filters, distinct values for keys.
+for each step, from the facts of its inputs and from its arguments: join keys that only partly match,
+rows on both sides of each test of a filter, distinct values for keys.
 """
 
 import ibis_anim as ibis  # the only change from plain ibis code

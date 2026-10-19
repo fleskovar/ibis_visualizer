@@ -1,0 +1,2975 @@
+{
+ "source_language": "python",
+ "packages": [
+  {
+   "name": "__root__",
+   "qualified_name": "__root__",
+   "classes": [
+    {
+     "name": "_SubmoduleAlias",
+     "qualified_name": "_SubmoduleAlias",
+     "kind": "class",
+     "attributes": [],
+     "operations": [
+      {
+       "name": "find_spec",
+       "parameters": [
+        {
+         "name": "fullname",
+         "type": "",
+         "default": null
+        },
+        {
+         "name": "path",
+         "type": "",
+         "default": null
+        },
+        {
+         "name": "target",
+         "type": "",
+         "default": "None"
+        }
+       ],
+       "return_type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "create_module",
+       "parameters": [
+        {
+         "name": "spec",
+         "type": "",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "exec_module",
+       "parameters": [
+        {
+         "name": "module",
+         "type": "",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      }
+     ],
+     "bases": [
+      "importlib.abc.MetaPathFinder",
+      "importlib.abc.Loader"
+     ],
+     "location": {
+      "file": "__init__.py",
+      "start_line": 43,
+      "end_line": 57
+     },
+     "layout": null,
+     "description": "Make `import ibis_anim.selectors` give the module `ibis.selectors`.",
+     "rules": [],
+     "status": "unchanged",
+     "dependencies": []
+    },
+    {
+     "name": "Project",
+     "qualified_name": "Project",
+     "kind": "class",
+     "attributes": [],
+     "operations": [
+      {
+       "name": "__init__",
+       "parameters": [
+        {
+         "name": "root",
+         "type": "Path",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "of",
+       "parameters": [
+        {
+         "name": "cls",
+         "type": "",
+         "default": null
+        },
+        {
+         "name": "func",
+         "type": "",
+         "default": null
+        }
+       ],
+       "return_type": "Project",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_read_yaml",
+       "parameters": [
+        {
+         "name": "path",
+         "type": "Path",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_columns",
+       "parameters": [
+        {
+         "name": "node",
+         "type": "",
+         "default": null
+        }
+       ],
+       "return_type": "dict",
+       "visibility": "protected",
+       "is_static": true,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_tests",
+       "parameters": [
+        {
+         "name": "node",
+         "type": "",
+         "default": null
+        }
+       ],
+       "return_type": "dict",
+       "visibility": "protected",
+       "is_static": true,
+       "is_abstract": false,
+       "description": "dbt tests and constraints of the columns: unique, not_null, accepted_values. dbt checks them at\neach build, so they are facts about the table.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_declare",
+       "parameters": [
+        {
+         "name": "key",
+         "type": "",
+         "default": null
+        },
+        {
+         "name": "table",
+         "type": "",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "name",
+       "parameters": [
+        {
+         "name": "func",
+         "type": "",
+         "default": null
+        }
+       ],
+       "return_type": "str",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "call",
+       "parameters": [
+        {
+         "name": "func",
+         "type": "",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "table",
+       "parameters": [
+        {
+         "name": "reference",
+         "type": "",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "The table of a `ref` or a `source`: a model that runs, or a table with a schema only.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_schema_table",
+       "parameters": [
+        {
+         "name": "key",
+         "type": "",
+         "default": null
+        },
+        {
+         "name": "name",
+         "type": "str",
+         "default": null
+        },
+        {
+         "name": "sql_file",
+         "type": "Path | None",
+         "default": "None"
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      }
+     ],
+     "bases": [],
+     "location": {
+      "file": "_dbt.py",
+      "start_line": 75,
+      "end_line": 164
+     },
+     "layout": null,
+     "description": null,
+     "rules": [],
+     "status": "unchanged",
+     "dependencies": [
+      "Path",
+      "MODEL_SUFFIXES",
+      "ValueError"
+     ]
+    },
+    {
+     "name": "Column",
+     "qualified_name": "Column",
+     "kind": "class",
+     "attributes": [
+      {
+       "name": "values",
+       "type": "P.Interval",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "ANY",
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "nulls",
+       "type": "str",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "MAYBE",
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "equal_to",
+       "type": "frozenset",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "frozenset()",
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "subset_of",
+       "type": "frozenset",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "frozenset()",
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "fields",
+       "type": "tuple",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "()",
+       "description": null,
+       "status": "unchanged"
+      }
+     ],
+     "operations": [
+      {
+       "name": "narrowed",
+       "parameters": [],
+       "return_type": "Column",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "The column after rows were removed: equal sets become subsets.",
+       "rules": [],
+       "status": "unchanged"
+      }
+     ],
+     "bases": [],
+     "location": {
+      "file": "_facts.py",
+      "start_line": 20,
+      "end_line": 29
+     },
+     "layout": null,
+     "description": null,
+     "rules": [],
+     "status": "unchanged",
+     "dependencies": []
+    },
+    {
+     "name": "TableFacts",
+     "qualified_name": "TableFacts",
+     "kind": "class",
+     "attributes": [
+      {
+       "name": "columns",
+       "type": "dict[str, Column]",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "keys",
+       "type": "list[frozenset]",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "field(default_factory=list)",
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "rows",
+       "type": "str",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "''",
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "warnings",
+       "type": "list[str]",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "field(default_factory=list)",
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "ranks",
+       "type": "dict",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "field(default_factory=dict)",
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "can_empty",
+       "type": "bool",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "False",
+       "description": null,
+       "status": "unchanged"
+      }
+     ],
+     "operations": [
+      {
+       "name": "column",
+       "parameters": [
+        {
+         "name": "name",
+         "type": "str",
+         "default": null
+        }
+       ],
+       "return_type": "Column",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "unique",
+       "parameters": [
+        {
+         "name": "name",
+         "type": "str",
+         "default": null
+        }
+       ],
+       "return_type": "bool",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      }
+     ],
+     "bases": [],
+     "location": {
+      "file": "_facts.py",
+      "start_line": 33,
+      "end_line": 45
+     },
+     "layout": null,
+     "description": null,
+     "rules": [],
+     "status": "unchanged",
+     "dependencies": [
+      "Column"
+     ]
+    },
+    {
+     "name": "Sample",
+     "qualified_name": "Sample",
+     "kind": "class",
+     "attributes": [
+      {
+       "name": "label",
+       "type": "str",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "columns",
+       "type": "list[str]",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "rows",
+       "type": "list[dict]",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "total",
+       "type": "int",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "partial",
+       "type": "bool",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "False",
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "types",
+       "type": "dict",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "field(default_factory=dict)",
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "source",
+       "type": "object",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "None",
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "facts",
+       "type": "dict",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "field(default_factory=dict)",
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "changed",
+       "type": "frozenset",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "frozenset()",
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "generated",
+       "type": "bool",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": "False",
+       "description": "True when the rows were made up for this step: the caption says \"generated rows\", not a row count.",
+       "status": "unchanged"
+      }
+     ],
+     "operations": [],
+     "bases": [],
+     "location": {
+      "file": "_scene.py",
+      "start_line": 105,
+      "end_line": 116
+     },
+     "layout": null,
+     "description": "Rows of a table, as a grid shows them.",
+     "rules": [],
+     "status": "unchanged",
+     "dependencies": []
+    },
+    {
+     "name": "Grid",
+     "qualified_name": "Grid",
+     "kind": "class",
+     "attributes": [
+      {
+       "name": "anchors",
+       "type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "title",
+       "type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      }
+     ],
+     "operations": [
+      {
+       "name": "__init__",
+       "parameters": [
+        {
+         "name": "sample",
+         "type": "Sample",
+         "default": null
+        },
+        {
+         "name": "shown",
+         "type": "",
+         "default": null
+        },
+        {
+         "name": "width",
+         "type": "float",
+         "default": null
+        },
+        {
+         "name": "used",
+         "type": "",
+         "default": "()"
+        },
+        {
+         "name": "created",
+         "type": "",
+         "default": "()"
+        },
+        {
+         "name": "keys",
+         "type": "",
+         "default": "()"
+        },
+        {
+         "name": "colors",
+         "type": "",
+         "default": "None"
+        },
+        {
+         "name": "types",
+         "type": "",
+         "default": "True"
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "slot",
+       "parameters": [
+        {
+         "name": "r",
+         "type": "int",
+         "default": null
+        },
+        {
+         "name": "j",
+         "type": "int",
+         "default": null
+        }
+       ],
+       "return_type": "np.ndarray",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Centre of the cell at row `r` and column position `j`, also for a cell that does not exist.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "cell_w",
+       "parameters": [],
+       "return_type": "float",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "cell",
+       "parameters": [
+        {
+         "name": "r",
+         "type": "int",
+         "default": null
+        },
+        {
+         "name": "name",
+         "type": "str",
+         "default": null
+        }
+       ],
+       "return_type": "VGroup",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "header",
+       "parameters": [
+        {
+         "name": "name",
+         "type": "str",
+         "default": null
+        }
+       ],
+       "return_type": "VGroup",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "row",
+       "parameters": [
+        {
+         "name": "r",
+         "type": "int",
+         "default": null
+        }
+       ],
+       "return_type": "VGroup",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "type_cell",
+       "parameters": [
+        {
+         "name": "name",
+         "type": "str",
+         "default": null
+        }
+       ],
+       "return_type": "VGroup",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "column",
+       "parameters": [
+        {
+         "name": "name",
+         "type": "str",
+         "default": null
+        },
+        {
+         "name": "header",
+         "type": "",
+         "default": "True"
+        }
+       ],
+       "return_type": "VGroup",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "commit_rows",
+       "parameters": [
+        {
+         "name": "perm",
+         "type": "list[int]",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Renumber the rows after row perm[j] moved to position j.",
+       "rules": [],
+       "status": "unchanged"
+      }
+     ],
+     "bases": [
+      "VGroup"
+     ],
+     "location": {
+      "file": "_scene.py",
+      "start_line": 427,
+      "end_line": 492
+     },
+     "layout": null,
+     "description": "A table drawn as cells of equal size. Row -1 is the header row.",
+     "rules": [],
+     "status": "unchanged",
+     "dependencies": [
+      "Sample",
+      "VGroup",
+      "Text",
+      "UP",
+      "YELLOW_E",
+      "VectorizedPoint",
+      "SANS",
+      "GREY_A",
+      "LEFT",
+      "GREEN_E",
+      "NEUTRAL",
+      "ROW_H",
+      "META_GAP",
+      "TYPE_FILL",
+      "FACTS_H"
+     ]
+    },
+    {
+     "name": "Card",
+     "qualified_name": "Card",
+     "kind": "class",
+     "attributes": [
+      {
+       "name": "box",
+       "type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      }
+     ],
+     "operations": [
+      {
+       "name": "__init__",
+       "parameters": [
+        {
+         "name": "name",
+         "type": "str",
+         "default": null
+        },
+        {
+         "name": "table",
+         "type": "",
+         "default": null
+        },
+        {
+         "name": "rows",
+         "type": "int",
+         "default": null
+        },
+        {
+         "name": "preview",
+         "type": "list[dict]",
+         "default": null
+        },
+        {
+         "name": "key",
+         "type": "str",
+         "default": "''"
+        },
+        {
+         "name": "note",
+         "type": "str",
+         "default": "''"
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "set_state",
+       "parameters": [
+        {
+         "name": "state",
+         "type": "str",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "input: read by the step; output: made by the step; idle: in scope; dead: no later step reads it.",
+       "rules": [],
+       "status": "unchanged"
+      }
+     ],
+     "bases": [
+      "VGroup"
+     ],
+     "location": {
+      "file": "_scene.py",
+      "start_line": 499,
+      "end_line": 540
+     },
+     "layout": null,
+     "description": "One table on the tables shelf: name, shape, and a mini table of its first rows.",
+     "rules": [],
+     "status": "unchanged",
+     "dependencies": [
+      "RoundedRectangle",
+      "CARD_FILL",
+      "Text",
+      "VGroup",
+      "THUMB_W",
+      "THUMB_H",
+      "GREY_B",
+      "SANS",
+      "BOLD",
+      "MONO",
+      "GREY_A",
+      "UL",
+      "UR",
+      "Rectangle",
+      "GREY_D",
+      "NEUTRAL",
+      "FACTS_TEXT",
+      "WHITE",
+      "YELLOW",
+      "GREEN",
+      "GREY_C"
+     ]
+    },
+    {
+     "name": "DebuggerScene",
+     "qualified_name": "DebuggerScene",
+     "kind": "class",
+     "attributes": [
+      {
+       "name": "columns_from",
+       "type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "chain_of",
+       "type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "chrome",
+       "type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "caption",
+       "type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "trace_panel",
+       "type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "dag_panel",
+       "type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "result",
+       "type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "carry",
+       "type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "carry_op",
+       "type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "program",
+       "type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "code",
+       "type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "trace_lines",
+       "type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "frame",
+       "type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "facts",
+       "type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "made",
+       "type": "dict",
+       "visibility": "public",
+       "is_static": false,
+       "is_readonly": false,
+       "default": null,
+       "description": "Table op -> the rows (pyarrow) that a step generated for it or computed from generated rows. The shelf cards read their preview from it. Replaces bind.",
+       "status": "unchanged"
+      }
+     ],
+     "operations": [
+      {
+       "name": "__init__",
+       "parameters": [
+        {
+         "name": "steps",
+         "type": "list[Step]",
+         "default": null
+        },
+        {
+         "name": "title",
+         "type": "str",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "construct",
+       "parameters": [],
+       "return_type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_overview",
+       "parameters": [],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_dag",
+       "parameters": [
+        {
+         "name": "i",
+         "type": "int",
+         "default": null
+        }
+       ],
+       "return_type": "VGroup",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "The program graph, bottom left: source tables \u2192 calls \u2192 the tables that each call hands on \u2192 the calls\nthat read them \u2192 the result. The call of step i is lit, with the names of the tables on its arrows in; the\ncalls that ran are green.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_trace_lines",
+       "parameters": [],
+       "return_type": "list[tuple[str, int, str, int]]",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "(kind, step, text, depth): a line per call with the tables that it reads, a line per step under it, and a\n\"return\" line per table that the call hands on, with the calls that read it (`\u2192 stg_stores to usa_stores()`).",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_trace",
+       "parameters": [
+        {
+         "name": "i",
+         "type": "int",
+         "default": null
+        }
+       ],
+       "return_type": "VGroup",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "The trace around step i: the steps that ran, the current step, and the steps to come.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_strip",
+       "parameters": [
+        {
+         "name": "i",
+         "type": "int",
+         "default": null
+        }
+       ],
+       "return_type": "VGroup",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "The statement as a pipeline: source \u2192 each call of the chain \u2192 result, with the current call lit.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_code_block",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        }
+       ],
+       "return_type": "tuple[str, list[tuple[str, str, bool]]]",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "The place of the statement (`file.py:12`) and its display lines, wrapped to the width of the bar.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_layout",
+       "parameters": [
+        {
+         "name": "i",
+         "type": "int",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Each line of the statement of step i after the first moves the trace, the pipeline and the stage down.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_header",
+       "parameters": [
+        {
+         "name": "i",
+         "type": "int",
+         "default": null
+        },
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Top bar: step, operation, call path and the current statement. Left: the trace. Middle: the pipeline.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_card",
+       "parameters": [
+        {
+         "name": "key",
+         "type": "",
+         "default": null
+        }
+       ],
+       "return_type": "Card",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_activate",
+       "parameters": [
+        {
+         "name": "frame",
+         "type": "ScopeFrame",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "New tables join the shelf; the step's inputs light up and grow; the others dim.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_facts_texts",
+       "parameters": [
+        {
+         "name": "op",
+         "type": "",
+         "default": null
+        }
+       ],
+       "return_type": "dict",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_named",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "tuple[list[Sample], Sample]",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Grid titles: the variable of the code for an input, else the name of its table (`filtered orders`).",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_with_facts",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "tuple[list[Sample], Sample]",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_guarantees",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "What the step guarantees about its result, then its warnings.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_enter",
+       "parameters": [],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Each input table grows out of its card on the shelf. In a chain, the table already on the stage\nmoves into place instead.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_morph",
+       "parameters": [
+        {
+         "name": "old",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "new",
+         "type": "Grid",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Hand a table from one layout to the next: each column and each row moves to its new place.\n\nA cell moves to the cell of the same column and the same row (rows are matched by their values).\nCells of columns or rows that the new layout does not show leave first; new cells arrive last.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_finish",
+       "parameters": [
+        {
+         "name": "i",
+         "type": "int",
+         "default": null
+        },
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "frame",
+         "type": "ScopeFrame",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "The result shrinks into its card; replaced and expired cards leave; the shelf closes up.\n\nWhen the next step works on the result (a chain, or `t = t.filter(...)` then `t.mutate(...)`), the result\nstays on the stage for it, and its card appears on the shelf without the result moving there.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_persistent",
+       "parameters": [],
+       "return_type": "list",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_say",
+       "parameters": [
+        {
+         "name": "text",
+         "type": "str",
+         "default": null
+        },
+        {
+         "name": "wait",
+         "type": "",
+         "default": "0.6"
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Show the caption of the current phase under the pipeline.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_settle",
+       "parameters": [],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Keep only the debugger frame, the caption and `keep` on the screen.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_scale",
+       "parameters": [
+        {
+         "name": "grids",
+         "type": "",
+         "default": null
+        },
+        {
+         "name": "width",
+         "type": "float",
+         "default": null
+        },
+        {
+         "name": "height",
+         "type": "float",
+         "default": null
+        }
+       ],
+       "return_type": "float",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_put",
+       "parameters": [
+        {
+         "name": "grid",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "left",
+         "type": "float",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_side_by_side",
+       "parameters": [
+        {
+         "name": "grids",
+         "type": "",
+         "default": null
+        },
+        {
+         "name": "gap",
+         "type": "",
+         "default": "1.2"
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_in_place",
+       "parameters": [
+        {
+         "name": "first",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "margin",
+         "type": "float",
+         "default": "2.5"
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Draw the grids on top of each other, with the same top-left cell. `margin` is room on the right.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_highlight",
+       "parameters": [
+        {
+         "name": "grid",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "names",
+         "type": "",
+         "default": null
+        },
+        {
+         "name": "color",
+         "type": "",
+         "default": "YELLOW"
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_fly",
+       "parameters": [
+        {
+         "name": "groups",
+         "type": "",
+         "default": null
+        },
+        {
+         "name": "run_time",
+         "type": "",
+         "default": "1.5"
+        },
+        {
+         "name": "lag_ratio",
+         "type": "",
+         "default": "0.0"
+        },
+        {
+         "name": "path_arc",
+         "type": "",
+         "default": "0.0"
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Copies of the source cells move into the target cells. Each group of pairs moves together.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_drop",
+       "parameters": [
+        {
+         "name": "grid",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "parts",
+         "type": "",
+         "default": null
+        },
+        {
+         "name": "shift",
+         "type": "",
+         "default": "RIGHT * 0.6"
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Fade `parts` out and take their cells out of `grid`. FadeOut alone restores the mobject at the end.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_tint",
+       "parameters": [
+        {
+         "name": "grid",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "keys",
+         "type": "",
+         "default": null
+        },
+        {
+         "name": "colors",
+         "type": "dict",
+         "default": null
+        }
+       ],
+       "return_type": "list",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_reorder",
+       "parameters": [
+        {
+         "name": "grid",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "perm",
+         "type": "list[int]",
+         "default": null
+        },
+        {
+         "name": "run_time",
+         "type": "",
+         "default": "2.5"
+        }
+       ],
+       "return_type": "bool",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Move row perm[j] to position j along an arc, so that the rows visibly change places.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_sort_arrow",
+       "parameters": [
+        {
+         "name": "grid",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "keys",
+         "type": "",
+         "default": null
+        }
+       ],
+       "return_type": "VGroup",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "A vertical arrow right of the grid, with the sort keys and their direction.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_animate",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_flow",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Fallback: each output column comes from the input column with the same name.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_subset",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        },
+        {
+         "name": "test",
+         "type": "str | None",
+         "default": "None"
+        },
+        {
+         "name": "condition",
+         "type": "VGroup | None",
+         "default": "None"
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Each row gets a mark when there is a test; removed rows turn red and leave; the others slide up.\n\n`condition` is a filter label (see `_condition`): it stays at the right of the \u2714/\u2718 marks.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_filter",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_show_condition",
+       "parameters": [
+        {
+         "name": "label",
+         "type": "VGroup",
+         "default": null
+        },
+        {
+         "name": "grid",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "left",
+         "type": "float",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Put the filter label at `left`, level with the rows, and fit it into the stage.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_tests",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        },
+        {
+         "name": "tree",
+         "type": "",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Each test gets a column of \u2714/\u2718. Then, per row, the marks merge into the result (AND / OR).",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_distinct",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Take each row in turn; scan the rows below it; the duplicates turn red and leave; go to the next row.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_drop_null",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_fill_null",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Null cells light up red, then take the replacement value.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_set_op",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Union appends the rows of the second table; intersect and difference test each row.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_compare_rows",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "verb",
+         "type": "str",
+         "default": null
+        },
+        {
+         "name": "a",
+         "type": "Sample",
+         "default": null
+        },
+        {
+         "name": "b",
+         "type": "Sample",
+         "default": null
+        },
+        {
+         "name": "ga",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "gb",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "colors",
+         "type": "dict",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Intersect and difference compare whole rows: all the columns, not some of them.\n\nEach row of the first table looks for a row of the second one with the same values in every\ncolumn: a solid line joins equal rows. When the nearest row shares only some values, a dashed\nline points to it and the cells that differ turn red: such a row does not count.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_retitle",
+       "parameters": [
+        {
+         "name": "grid",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "An in-place step keeps drawing its input table: at the end, its title names the result.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_refresh_facts",
+       "parameters": [
+        {
+         "name": "grid",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "An in-place step keeps drawing its input table: at the end, its facts row takes the facts of the result.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_subset_marks",
+       "parameters": [
+        {
+         "name": "grid",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "keep",
+         "type": "list[bool]",
+         "default": null
+        },
+        {
+         "name": "marks",
+         "type": "",
+         "default": "True"
+        },
+        {
+         "name": "extra",
+         "type": "",
+         "default": "None"
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Optional \u2714/\u2718 marks; the rows to remove turn red and leave; the other rows slide up.\n\n`extra` gives, for each row, mobjects (test marks) that move and leave with the row.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_unnest",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Each array cell splits into its elements, and each element gets its own row.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_order_by",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Highlight the sort keys, draw their direction, and move each row to its new position.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_columns",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Carried columns keep or change place; per row, the source cells merge into each new cell.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_insert",
+       "parameters": [
+        {
+         "name": "name",
+         "type": "str",
+         "default": null
+        },
+        {
+         "name": "column",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "cname",
+         "type": "str",
+         "default": null
+        },
+        {
+         "name": "res",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "idx",
+         "type": "list",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "A column built earlier slides into the table: each of its cells moves to the cell of its row.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_coalesce",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "name",
+         "type": "str",
+         "default": null
+        },
+        {
+         "name": "value",
+         "type": "",
+         "default": null
+        },
+        {
+         "name": "s",
+         "type": "Sample",
+         "default": null
+        },
+        {
+         "name": "inp",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "res",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "idx",
+         "type": "list",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "ibis.coalesce: per row, a pointer tries the values in the order of the arguments; a null sends it to\nthe next value; the first value that is not null moves into the new cell.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_arrange_columns",
+       "parameters": [
+        {
+         "name": "grid",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "order",
+         "type": "list[str]",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Move the columns of `grid` into `order`, along arcs, so that the moves are easy to follow.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_ifelse",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "name",
+         "type": "str",
+         "default": null
+        },
+        {
+         "name": "value",
+         "type": "",
+         "default": null
+        },
+        {
+         "name": "s",
+         "type": "Sample",
+         "default": null
+        },
+        {
+         "name": "inp",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "res",
+         "type": "Grid",
+         "default": null
+        },
+        {
+         "name": "idx",
+         "type": "list",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "ibis.ifelse: each row tests the condition; the value of the chosen branch moves into the new cell.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_window",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Colour the partitions, sort the rows, then slide the window frame down the rows.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_aggregate",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Colour the rows by group, gather each group, then collapse each group into one row.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_join",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Move the keys to the inner edges, bring the tables together, line up the rows, merge the keys.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_pivot_wider",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Distinct names become columns, the other columns become rows, values move to their cell.",
+       "rules": [],
+       "status": "unchanged"
+      },
+      {
+       "name": "_pivot_longer",
+       "parameters": [
+        {
+         "name": "step",
+         "type": "Step",
+         "default": null
+        },
+        {
+         "name": "ins",
+         "type": "list[Sample]",
+         "default": null
+        },
+        {
+         "name": "out",
+         "type": "Sample",
+         "default": null
+        }
+       ],
+       "return_type": "",
+       "visibility": "protected",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "For each input row, the cells of the pivoted columns rotate into a column of the result.",
+       "rules": [],
+       "status": "unchanged"
+      }
+     ],
+     "bases": [
+      "Scene"
+     ],
+     "location": {
+      "file": "_scene.py",
+      "start_line": 567,
+      "end_line": 1969
+     },
+     "layout": null,
+     "description": "A debugger view: the trace on the left, the current statement on top, the step in the middle,\nand the tables in scope on a shelf at the bottom. Schema-only steps: each step generates its own input rows (_samples.for_step), from the facts of its inputs and its own arguments.",
+     "rules": [],
+     "status": "unchanged",
+     "dependencies": [
+      "Exception",
+      "VGroup",
+      "Step",
+      "Line",
+      "SHELF_LINE",
+      "GREY_D",
+      "DAG_RIGHT",
+      "Text",
+      "SHELF_LEFT",
+      "CARDS_LEFT",
+      "SANS",
+      "BOLD",
+      "GREY_B",
+      "FadeIn",
+      "FadeOut",
+      "DOWN",
+      "MONO",
+      "RoundedRectangle",
+      "DAG_TOP",
+      "DAG_BOTTOM",
+      "CURRENT_LINE",
+      "CurvedArrow",
+      "YELLOW_A",
+      "WHITE",
+      "GREY_C",
+      "NORMAL",
+      "BLACK",
+      "CARD_FILL",
+      "GREEN",
+      "YELLOW",
+      "Arrow",
+      "GREY_A",
+      "RIGHT",
+      "LEFT",
+      "PI",
+      "UP",
+      "DIVIDER_X",
+      "Rectangle",
+      "RED",
+      "STAGE_W",
+      "TRACE_LINES",
+      "CODE_LINE_H",
+      "BAR_BOTTOM",
+      "STRIP_Y",
+      "CAPTION_Y",
+      "ZONE_TOP",
+      "UR",
+      "CODE_Y",
+      "FadeTransform",
+      "ZONE_BOTTOM",
+      "UL",
+      "Card",
+      "ScopeFrame",
+      "Circumscribe",
+      "Sample",
+      "WARNING_FILL",
+      "Grid",
+      "LaggedStart",
+      "FACTS_TEXT",
+      "ORANGE",
+      "Transform",
+      "Group",
+      "ORIGIN",
+      "CAPTION",
+      "STAGE_X",
+      "AnimationGroup",
+      "TransformFromCopy",
+      "DashedLine",
+      "MAX_COLUMNS",
+      "RESULT_FILL",
+      "SurroundingRectangle",
+      "Create",
+      "RED_E",
+      "FACTS_H",
+      "MAX_RESULT_ROWS",
+      "Indicate",
+      "TEST_FILL",
+      "Circle",
+      "Succession",
+      "L",
+      "R",
+      "ValueError",
+      "BLUE_D",
+      "Rotate"
+     ]
+    },
+    {
+     "name": "ScopeFrame",
+     "qualified_name": "ScopeFrame",
+     "kind": "class",
+     "attributes": [
+      {
+       "name": "shown",
+       "type": "list",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "inputs",
+       "type": "list",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "output",
+       "type": "object",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "after",
+       "type": "list",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "replaced",
+       "type": "object | None",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "expired",
+       "type": "list",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "dead",
+       "type": "set",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "dead_after",
+       "type": "set",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      }
+     ],
+     "operations": [],
+     "bases": [],
+     "location": {
+      "file": "_scope.py",
+      "start_line": 16,
+      "end_line": 26
+     },
+     "layout": null,
+     "description": "The panel around one step. Each key is an op.",
+     "rules": [],
+     "status": "unchanged",
+     "dependencies": []
+    },
+    {
+     "name": "Call",
+     "qualified_name": "Call",
+     "kind": "class",
+     "attributes": [
+      {
+       "name": "name",
+       "type": "str",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "depth",
+       "type": "int",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "steps",
+       "type": "list[int]",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "reads",
+       "type": "list",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "hands",
+       "type": "list",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      }
+     ],
+     "operations": [],
+     "bases": [],
+     "location": {
+      "file": "_scope.py",
+      "start_line": 107,
+      "end_line": 114
+     },
+     "layout": null,
+     "description": "A run of steps in one function call, or in the code of a module: a node of the program graph.",
+     "rules": [],
+     "status": "unchanged",
+     "dependencies": []
+    },
+    {
+     "name": "Step",
+     "qualified_name": "Step",
+     "kind": "class",
+     "attributes": [
+      {
+       "name": "op",
+       "type": "str",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "inputs",
+       "type": "list[ir.Table]",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "output",
+       "type": "ir.Table",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "labels",
+       "type": "list[str]",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "code",
+       "type": "str",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "stack",
+       "type": "list[FrameSummary]",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "args",
+       "type": "tuple",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "kwargs",
+       "type": "dict",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": null,
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "group_by",
+       "type": "list[str]",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "field(default_factory=list)",
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "used",
+       "type": "list[str]",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "field(default_factory=list)",
+       "description": null,
+       "status": "unchanged"
+      },
+      {
+       "name": "created",
+       "type": "list[str]",
+       "visibility": "public",
+       "is_static": true,
+       "is_readonly": false,
+       "default": "field(default_factory=list)",
+       "description": null,
+       "status": "unchanged"
+      }
+     ],
+     "operations": [
+      {
+       "name": "function",
+       "parameters": [],
+       "return_type": "str",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": null,
+       "rules": [],
+       "status": "unchanged"
+      }
+     ],
+     "bases": [],
+     "location": {
+      "file": "_tracer.py",
+      "start_line": 38,
+      "end_line": 55
+     },
+     "layout": null,
+     "description": "One ibis operation, as the visual debugger shows it.",
+     "rules": [],
+     "status": "unchanged",
+     "dependencies": []
+    }
+   ],
+   "sub_packages": [],
+   "layout": null,
+   "description": null,
+   "status": "unchanged"
+  }
+ ],
+ "activities": [],
+ "sequences": [],
+ "associations": [],
+ "root_path": "C:\\local\\ibis_visualizer\\ibis_anim"
+}

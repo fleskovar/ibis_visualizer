@@ -114,12 +114,19 @@ In the video, each table has a facts row above its type row. `any` means that no
 
 ## Pipelines without data
 
-A pipeline can use tables that have a schema only: `ibis.table({"order_id": "int64", ...}, name="orders")`. Then ibis_anim generates a few rows for each such table when it renders the video. The rows come from the types of the columns and from the code:
+A pipeline can use tables that have a schema only: `ibis.table({"order_id": "int64", ...}, name="orders")`. Then each step gets its own generated rows, about 6 for each table that it reads. Rows that are made once for the source tables do not survive the filters and joins of a long pipeline. The rows of a step come from:
 
-- each type has simple values: `A, B, C` for strings, `1, 2, 3` for integers, spread values for floats, dates from 2024-01-01
-- a declared key has distinct values; other columns repeat values, with different periods, so that their values combine in different ways
-- two columns that a join compares only partly match: one gets `A, B, C`, the other `A, D, C`. A declared foreign key (`references=`) takes its values from the column that it references
-- a column that the code compares with a literal (`status == "paid"`, `amount > 100`) gets the literal and values on both sides of the test, so that each test has rows that pass and rows that fail
+- the facts of each input table: value sets, ranges, keys and nulls. The facts hold what the steps before guarantee, so the rows agree with them. After `filter(_.status == "paid")`, the next step gets rows with status `paid` only
+- the arguments of the step:
+  - filter, `ifelse`, `case`: each test (`==`, `>`, `isin`, `between`, `isnull`) has rows that pass it and rows that fail it. Two rows pass all tests, one row fails each test on its own, and one row fails all of them
+  - join: about half of the right keys match the left keys, the other half do not. A right key that is not unique repeats, so the join fans out
+  - group_by, window partitions, pivot_wider: the keys repeat, so each group has several rows. A distinct gets duplicate rows. A union, intersect or difference gets rows that are in both tables
+  - drop_null, fill_null, coalesce: the columns that can be null get nulls
+- the types of the columns: `A, B, C` for strings, `1, 2, 3` for integers, spread values for floats, dates from 2024-01-01
+
+A column that a mutate before the step computes from other columns is computed again from the generated rows: after `big=_.amount > 200`, a row with amount 250 has `big` true.
+
+A step that casts a text column to another type gets no rows: the video shows the change of the types only, and the warning that a text that does not parse makes the cast fail. The grid title reads `schema only`; the title of a grid with generated rows reads `6 generated rows`, as a table with a schema only has no row count.
 
 The generated rows illustrate the steps only. The facts do not come from them. See `examples/schema_only.py`.
 

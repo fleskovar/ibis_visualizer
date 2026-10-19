@@ -4,7 +4,7 @@ from pathlib import Path
 
 import ibis_anim
 from ibis_anim._derive import derive
-from ibis_anim._samples import generate
+from ibis_anim._samples import for_step
 from ibis_anim._scope import table_names
 
 PROJECT = Path(__file__).parent.parent / "examples" / "dbt_shop"
@@ -18,10 +18,12 @@ def test_a_model_runs_with_the_models_upstream_of_it():
     assert model.__name__ == "store_revenue" and result.columns == ("store_name", "customer_country", "revenue", "orders")
     names = table_names(steps)
     facts = derive(steps, names)
-    assert not any(facts[s.output.op()].warnings for s in steps)  # the dbt tests declare the keys: no fan-out
+    warnings = [w for s in steps for w in facts[s.output.op()].warnings]
+    assert not any("fan-out" in w for w in warnings)  # the dbt tests declare the keys: no fan-out
     assert facts[steps[3].output.op()].unique("store_id")  # a test of the model stg_stores, kept after the filter
-    stores = next(rows for op, rows in generate(steps, names, facts).items() if op.name == "stores")
-    assert all(v.isdigit() for v in stores["store_id"].to_pylist())  # text that the model casts to int
+    cast = next(s for s in steps if s.function == "stg_stores")  # text that the model casts to int: the types only
+    assert not any(rows.num_rows for rows in for_step(cast, facts).values())
+    assert any("fails on a text" in w for w in facts[cast.output.op()].warnings)
 
 
 def test_each_model_hands_its_table_to_the_models_that_read_it():

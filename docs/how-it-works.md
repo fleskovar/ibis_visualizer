@@ -46,8 +46,8 @@ The data goes through five stages:
                (_tracer.py)               │             │   (_scope.py)                          │
                                           │             ├─► derive ──────► facts per table ──────┤
                                           │             │   (_derive.py, _facts.py)              │
-                                          │             └─► generate ────► rows for schema-only ─┤
-                                          │                 (_samples.py)    tables              │
+                                          │             └─► for_step ────► rows for each step ───┤
+                                          │                 (_samples.py)    on schema-only tables│
                                           │                                                      ▼
                                           │                            DebuggerScene (_scene.py)
                                           │                            for each step:
@@ -66,7 +66,7 @@ Each component has one responsibility:
 | Tracer | [`_tracer.py`](../ibis_anim/_tracer.py) | ibis calls, Python frames, source files | `list[Step]` | Records each table call with its inputs, output, variables, source text and call stack. |
 | Scope planner | [`_scope.py`](../ibis_anim/_scope.py) | `list[Step]` | names, chains, calls, scope frames | Pure functions. Decide what the debugger shows at each step. |
 | Facts | [`_facts.py`](../ibis_anim/_facts.py), [`_derive.py`](../ibis_anim/_derive.py) | `list[Step]`, declarations | `TableFacts` per table | Abstract interpretation. Compute what is true for any data. |
-| Sample generator | [`_samples.py`](../ibis_anim/_samples.py) | `list[Step]`, facts | rows for each schema-only table | Make rows for tables that have a schema and no data. |
+| Sample generator | [`_samples.py`](../ibis_anim/_samples.py) | one `Step`, facts | rows for each schema-only table that the step reads | Make rows for one step on tables that have a schema and no data. |
 | dbt loader | [`_dbt.py`](../ibis_anim/_dbt.py) | a dbt project | input tables, declarations | Run a dbt-ibis model and the models upstream of it. |
 | Scene | [`_scene.py`](../ibis_anim/_scene.py) | all of the above | a video | Draw the debugger and animate each step. |
 
@@ -449,7 +449,7 @@ An ibis expression stores a graph of immutable op nodes. `Node.replace` returns 
 | Block | Replaces the inputs with | Why |
 | --- | --- | --- |
 | Facts, `_derive._step` | unbound tables `in0`, `in1` | The SQL of one step reads its direct inputs only, not the full plan above them. |
-| Sample generator, `_samples.bind` | memtables of generated rows | A schema-only table has no data to read. |
+| Re-run on generated rows, `_scene._binder` | memtables of the rows that `for_step` generated | A schema-only table has no data to read. |
 | Re-run, `_scene._run_on_samples` | memtables of the first 6 rows | Each value on the screen comes from the rows on the screen. |
 | Part values, `_scene._evaluate` | a memtable of the rows on the screen | The animations of a filter with several tests, of `coalesce` and of `ifelse` show the value of each part on each row. |
 
@@ -622,26 +622,26 @@ A declaration must state a rule that holds for any data, such as an enum type, a
 
 **Responsibility.** Make rows for each table that has a schema only, `ibis.table(schema, name=...)`. The video needs rows, but the facts do not use them.
 
-`generate` ([`_samples.py:42`](../ibis_anim/_samples.py#L42)) reads the trace for hints, and then makes 6 rows for each source table:
+`for_step(step, facts)` ([`_samples.py`](../ibis_anim/_samples.py)) makes about 6 rows for each schema-only table that one step reads. Each step gets its own rows: rows made once for the source tables do not survive the filters and joins of a long pipeline. The tables are the frontier of the step: usually its inputs, but a chained join reads the tables of the joins before it.
 
-1. **Literals of the code.** For each comparison of a source column with a literal, `_around` gives values on both sides of the test. For `amount > 100`, these are 150, 200, 50 and 100.
-2. **Join columns.** Two columns that a join compares get values that only partly match. `_linked` gives `A B C D E F` to one column and `A G C H E I` to the other.
-3. **Declarations.** A key gets distinct values. A declared value set gives the values. A foreign key (`references=`) takes values from the column that it references.
-4. **Types.** Other columns get simple values of their type: `A, B, C` for strings, `1, 2, 3` for integers, dates from 2024-01-01.
+1. **Facts of the input.** The facts of each table (section 9) hold what the steps before guarantee. The value of a row is inside the value set of its column, a key gets distinct values, and a column that is never null gets no null. After `filter(_.status == "paid")`, the next step gets rows with status `paid` only.
+2. **Tests of the step.** `_tests` turns each test of a column into the interval of the values that pass it: `amount > 100` gives `(100, +inf)`. `_patterns` decides which tests each row passes: two rows pass all, one row fails each test on its own, and one row fails all. `_tested` picks a value inside the facts and on the side of each test that the row needs.
+3. **Join keys.** `_link` gives the right key every second value of the left key, and new values in between. A right key that is not unique repeats a value, so the join fans out.
+4. **Other arguments.** Group keys, window partitions and `names_from` repeat with a period of 2 or 3. A distinct gets duplicate rows. A set operation gets rows that are in both tables. `drop_null`, `fill_null` and `coalesce` get nulls.
+5. **Computed columns.** `_recomputed` computes again each column that a mutate before the table computes from other columns of the table. Thus `big = amount > 200` agrees with `amount` in each row.
+6. **Types.** The other values come from the type: `A, B, C` for strings, `1, 2, 3` for integers, dates from 2024-01-01.
 
-`source_columns` follows the lineage of the facts and the projections of the ops. Thus a hint on a column of a derived table reaches the source column.
+A step that casts a text column to another type gets tables without rows: no generated text is sure to parse. The video shows the change of the types, and the facts give the warning `cast of x to BIGINT fails on a text that is not a BIGINT`.
 
-`bind(data)` returns a function that replaces each schema-only table with a memtable of its rows (section 8). The scene calls this function before each query.
-
-The real code gives these rows for `orders.filter(_.status == "paid").filter(_.amount > 100)`. The table declares `order_id` as its key and `{paid, refunded}` as the values of `status`.
+The rows for `paid.join(customers, "customer_id")`, after `orders.filter((_.status == "paid") & (_.amount > 100))`, with `customer_id` declared as the key of `customers`:
 
 ```
-orders {'order_id': [1, 2, 3, 4, 5, 6],
-        'status': ['paid', 'refunded', 'paid', 'refunded', 'paid', 'refunded'],
-        'amount': [150.0, 200.0, 50.0, 100.0, 150.0, 200.0]}
+paid      {'customer_id': [1, 2, 3, 4, 5, 6], 'amount': [150.0, 200.0, 250.0, 120.0, 310.0, 199.9],
+           'status': ['paid', 'paid', 'paid', 'paid', 'paid', 'paid'], ...}
+customers {'customer_id': [1, 8, 3, 10, 5, 12], 'region': ['A', 'B', 'C', 'A', 'B', 'C'], ...}
 ```
 
-Each test has rows that pass and rows that fail, so the filter animation has rows to keep and rows to remove.
+Each value of `paid` agrees with the filter before it, and half of the keys match.
 
 ## 11. Block: dbt-ibis models as input
 
@@ -660,7 +660,7 @@ The dbt tests `unique`, `not_null` and `accepted_values`, and the constraints `p
 
 `_run_on_samples` ([`_scene.py:127`](../ibis_anim/_scene.py#L127)) does these steps for one step:
 
-1. Take the first 6 rows of each input, through `bind` (section 10).
+1. Take the first 6 rows of each input. A schema-only table reads the rows that `for_step` generated for this step (section 10).
 2. Replace each input with a memtable of its rows (section 8).
 3. Execute the replaced output on DuckDB. Keep at most 8 result rows.
 4. Return a `Sample` for each input and one for the output. A `Sample` holds the label, the columns, the rows, the full row count, the column types and the facts text.

@@ -458,6 +458,10 @@ def _cast(e, inner: Column, warnings: list) -> Column:
     source = e.this.type
     if source is not None and source.is_type(*exp.DataType.REAL_TYPES) and to.is_type(*exp.DataType.INTEGER_TYPES):
         warnings.append(f"cast of `{_pretty(e.this)}` to {to.sql(dialect='duckdb')} drops the fraction")
+    if source is not None and source.is_type(*exp.DataType.TEXT_TYPES) and not to.is_type(*exp.DataType.TEXT_TYPES):
+        warnings.append(f"try_cast of `{_pretty(e.this)}` gives null for a text that is not a {to.sql(dialect='duckdb')}"
+                        if isinstance(e, exp.TryCast) else
+                        f"cast of `{_pretty(e.this)}` to {to.sql(dialect='duckdb')} fails on a text that is not a {to.sql(dialect='duckdb')}")
     nulls = MAYBE if isinstance(e, exp.TryCast) else inner.nulls
     if to.is_type(*exp.DataType.INTEGER_TYPES) and not inner.values.empty and inner.values != ANY:
         lo, hi = inner.values.lower, inner.values.upper
