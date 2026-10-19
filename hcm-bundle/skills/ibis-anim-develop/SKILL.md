@@ -1,5 +1,5 @@
 ---
-description: Change or extend the ibis-anim library itself, for example to record a new ibis method, animate an operation, add a facts rule or a warning, or improve the generated sample rows. Use when you edit the files in the ibis_anim package of a clone of ibis-anim.
+description: Change or extend the ibis-anim library itself, for example to record a new ibis method, animate an operation, add a facts rule or a warning, improve the generated sample rows, or check that the library still runs with numpy 1.x, pyarrow 14 and manim 0.18.1 on Python 3.11. Use when you edit the files in the ibis_anim package or the pyproject.toml of a clone of ibis-anim.
 flavors: [develop]
 ---
 
@@ -19,6 +19,7 @@ Read [the architecture](./architecture.md) before you change code. It names the 
 - The facts never come from data. A rule that is not certain gives no fact. A missing fact is acceptable. A wrong fact is a defect.
 - Keep long pipelines fast. Use `_derive._substitute`, not `Node.replace`, and read real data through the tables of `_materialize`. See [Keep long pipelines fast](./recipes.md#keep-long-pipelines-fast).
 - `pyproject.toml` keeps sqlglot below 30.18. From 30.18, ibis 12 writes a `DROP` without a table name, so `Table.cache()`, `create_table(..., overwrite=True)` and the memtable cleanup at exit fail. Remove the limit only after a new ibis release passes the checks with the new sqlglot.
+- Keep the numpy 1.x stack working: Python 3.11 or 3.12, numpy 1.26, pyarrow 14 and manim 0.18.1. Do not raise the lower limit of manim, numpy or pyarrow in `pyproject.toml`, and do not use a function that these versions do not have. See [Check the numpy 1.x stack](./recipes.md#check-the-numpy-1x-stack).
 - A derived table name always has a space. `chains()` and the lineage in `_derive.py` treat a name that is a Python identifier as a variable of the program.
 
 ## Workflow

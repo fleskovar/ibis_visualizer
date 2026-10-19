@@ -650,7 +650,8 @@ class DebuggerScene(Scene):
         self._overview()
         self.play(FadeIn(self.frame))
         for i, (step, frame) in enumerate(zip(self.steps, self.frames)):
-            self.next_section(f"{i + 1:02d}_{step.function}_{step.op.split()[-1]}")
+            function = re.sub(r"[^\w.-]", "-", step.function)  # `<module>` is not a file name on Windows; manim 0.18 keeps it
+            self.next_section(f"{i + 1:02d}_{function}_{step.op.split()[-1]}")
             self._header(i, step)
             self._activate(frame)
             self.result = None

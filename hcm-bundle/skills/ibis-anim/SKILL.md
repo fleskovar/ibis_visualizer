@@ -1,5 +1,5 @@
 ---
-description: Render a debugger video of ibis code with ibis-anim, from Python or with the command line `python -m ibis_anim FILE[:FUNCTION]`, read the facts and warnings that it computes, and look at the frames of a render. Covers the caveats of dbt-ibis models. Use when the user asks to visualize, animate, explain or debug an ibis pipeline, one function of a file, a dbt-ibis model or a script that imports ibis_anim.
+description: Render a debugger video of ibis code with ibis-anim, from Python or with the command line `python -m ibis_anim FILE[:FUNCTION]`, read the facts and warnings that it computes, and look at the frames of a render. Covers the caveats of dbt-ibis models, and the setup for a project that must keep numpy 1.x (pyarrow 14, Python 3.11 or 3.12, manim 0.18.1, FFmpeg). Use when the user asks to visualize, animate, explain or debug an ibis pipeline, one function of a file, a dbt-ibis model or a script that imports ibis_anim, or to install ibis-anim next to an old pyarrow or numpy.
 flavors: [use, develop]
 ---
 
@@ -13,7 +13,18 @@ flavors: [use, develop]
 
 Install the package `ibis-anim` in the Python environment of the project. For dbt-ibis models, install the extra `ibis-anim[dbt]`. The package needs Python 3.11 or later, `ibis-framework[duckdb]` 10 or later, and `manim` 0.18.1 or later. If `import manim` fails, follow the manim installation guide for the platform.
 
-A project with numpy 1.x, for example for pyarrow 14, gets manim 0.18.1: manim 0.19 and later need numpy 2. pyarrow 14 does not declare that it needs numpy 1.x, so add `numpy<2` to the requirements of the project. Otherwise pip installs numpy 2 and manim 0.22, and pyarrow 14 fails. Use Python 3.11 or 3.12, because manim 0.18 does not support later versions. manim 0.18 needs the `ffmpeg` and `ffprobe` programs on the PATH. Without them, the render stops with `Manim could not find ffmpeg` or `FileNotFoundError`.
+A project with numpy 1.x, for example for pyarrow 14, needs a different setup: Python 3.11 or 3.12, `numpy<2` in its requirements, manim 0.18.1, and the `ffmpeg` and `ffprobe` programs on the PATH. Follow [the numpy 1.x setup](./numpy1.md). It gives each step, the checks and the errors of a wrong setup.
+
+External programs that pip does not install:
+
+| Program | Current setup (manim 0.19 or later) | numpy 1.x setup (manim 0.18.1) |
+| --- | --- | --- |
+| `ffmpeg` | not needed: the PyAV wheels contain FFmpeg | needed on the PATH |
+| `ffprobe` | not needed | needed on the PATH |
+| cairo and pango libraries | only on Linux, if pip builds `pycairo` or `ManimPango` from source | the same |
+| LaTeX | never | never |
+
+To install FFmpeg, put it on the PATH and check the PATH, see [External programs](./numpy1.md#external-programs).
 
 ## Render a video
 

@@ -26,7 +26,8 @@ The videos are 1080p at 30 frames per second. For faster renders, set `IBIS_ANIM
 
 - Python 3.11 or later, `ibis-framework[duckdb]` 10 or later, and manim 0.18.1 or later.
 - manim 0.19 and later need numpy 2. pyarrow before 16, for example pyarrow 14, needs numpy 1.x, but it does not declare this limit. For such a project, use Python 3.11 or 3.12, and add `numpy<2` to the requirements of the project. pip then installs manim 0.18.1, the last version that allows numpy 1.x. Without `numpy<2`, pip installs numpy 2 and manim 0.22, and pyarrow 14 fails. The tests pass with pyarrow 14.0.2, numpy 1.26.4 and manim 0.18.1.
-- manim 0.18 writes the video with the `ffmpeg` and `ffprobe` programs. Install FFmpeg and put it on the PATH. manim 0.19 and later need no FFmpeg program.
+- manim 0.18 writes the video with the `ffmpeg` and `ffprobe` programs. pip does not install them. Install FFmpeg (`winget install Gyan.FFmpeg`, `brew install ffmpeg`, `sudo apt install ffmpeg` or `conda install -c conda-forge ffmpeg`), and make sure that its `bin` folder is on the PATH. Then check in a new terminal: `ffmpeg -version` and `ffprobe -version`. The pip package `imageio-ffmpeg` is not sufficient, because it has no `ffprobe`. manim 0.19 and later need no FFmpeg program.
+- No setup needs LaTeX. On Linux, if pip builds `pycairo` or `ManimPango` from source, install the cairo and pango development packages first (`libcairo2-dev`, `libpango1.0-dev`, `pkg-config`).
 
 ## How it works
 

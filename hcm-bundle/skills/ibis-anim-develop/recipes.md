@@ -146,6 +146,83 @@ The render time of the data must grow with the number of steps, not faster.
 - Make a memtable of DuckDB rows with `_scene._memtable`. It copies the rows, so that DuckDB buffers do not stay alive until exit.
 - To measure, trace a long synthetic pipeline (80 steps or more) and time the data path without manim. Count the backend calls: each step must run a fixed number of queries.
 
+## Check the numpy 1.x stack
+
+ibis-anim supports two stacks. Run this check after a change to `pyproject.toml`, after a change that uses a new manim, numpy or pyarrow function, and before a release.
+
+| Stack | Python | numpy | pyarrow | manim | FFmpeg programs |
+| --- | --- | --- | --- | --- | --- |
+| current | 3.11 or later | 2.x | latest | latest (0.22) | not needed |
+| numpy 1.x | 3.11 or 3.12 | 1.26 | 14.0.2 | 0.18.1 | `ffmpeg` and `ffprobe` |
+
+The user guide for the numpy 1.x stack is [the numpy 1.x setup](../ibis-anim/numpy1.md) of the `ibis-anim` skill.
+
+Rules for code that must run on both stacks:
+
+- Use only manim features that manim 0.18.1 has. For example, sections, `tempconfig` and the config key `disable_caching` exist in 0.18.1.
+- Do not use numpy 2 functions, and do not use pyarrow functions newer than pyarrow 14.
+- Do not import a module for the first time inside the render at exit. On Python 3.11, an import that registers a thread hook then raises `can't register atexit after shutdown`. `__init__.py` imports `concurrent.futures.thread` first for this reason, and `test_the_render_at_exit_can_import_a_thread_pool` in `tests/test_tracer.py` checks it. That check fails on Python 3.11 only.
+
+### Make the test environment
+
+1. Make a Python 3.11 environment outside the clone. On Windows, keep the path of the environment short. ibis has test files with long paths, and a long folder name makes pip fail with `[WinError 206] The filename or extension is too long`. If the folder must be long, map it to a drive letter first, in PowerShell or cmd:
+
+   ```powershell
+   subst X: C:\a\long\folder\for\the\environment    # remove it later with: subst X: /d
+   py -3.11 -m venv X:\v
+   ```
+
+   Run `subst X: /d` in PowerShell or cmd, not in Git Bash: Git Bash changes `/d` into a path.
+
+2. Install the clone with the numpy 1.x set. Give the clone as a path, so that pip reads its `pyproject.toml`:
+
+   ```sh
+   X:/v/Scripts/python -m pip install "C:/path/to/ibis-anim[dbt]" "pyarrow==14.0.2" "numpy<2"
+   X:/v/Scripts/python -m pip check
+   X:/v/Scripts/python -m pip list    # manim 0.18.1, numpy 1.26.x, pyarrow 14.0.2
+   ```
+
+   If pip does not find manim 0.18.1, a requirement in `pyproject.toml` excludes it. Fix `pyproject.toml`, not the test.
+
+3. Check that pip still resolves the set from `pyproject.toml`, without the environment:
+
+   ```sh
+   X:/v/Scripts/python -m pip install --dry-run --ignore-installed --quiet --report report.json "C:/path/to/ibis-anim" "pyarrow==14.0.2" "numpy<2"
+   ```
+
+   Read the versions in the `install` list of `report.json`. Write the report to a file: on stdout, it mixes with other output. Without `numpy<2`, the report gives numpy 2 and manim 0.22. That is expected, and it is the reason why the user guide tells projects to add `numpy<2`.
+
+### Run the checks
+
+Set `PYTHONPATH` to the clone, so that the checks import the code of the clone, not the copy that pip installed:
+
+```sh
+export IBIS_ANIM=0 PYTHONIOENCODING=utf-8 PYTHONPATH=C:/path/to/ibis-anim
+for t in tests/test_*.py; do X:/v/Scripts/python "$t"; done
+```
+
+Each file must print `ok`. The import of manim 0.18 warns `Couldn't find ffmpeg or avconv` when `ffmpeg` is not on the PATH. The checks do not need it.
+
+### Check a render
+
+manim 0.18 needs the `ffmpeg` and `ffprobe` programs on the PATH. [External programs](../ibis-anim/numpy1.md#external-programs) in the user guide lists how to install them on each system, how to put them on the PATH and how to check the PATH. With a full FFmpeg on the PATH, render an example at low quality from an empty folder:
+
+```sh
+IBIS_ANIM_QUALITY=low X:/v/Scripts/python -m ibis_anim C:/path/to/ibis-anim/examples/schema_only.py
+```
+
+Without FFmpeg, use a test setup:
+
+1. Install `imageio-ffmpeg` and `av` in the test environment. `imageio-ffmpeg` has an `ffmpeg` binary, but no `ffprobe`.
+2. Copy the binary, `python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())"`, to an empty folder as `ffmpeg.exe` (`ffmpeg` on other systems). Put that folder first on the PATH. In Git Bash, write the folder as `/c/...`: a `C:/...` entry breaks the PATH at its colon.
+3. Render through [the manim 0.18 script](./manim018.py), which reads the clip metadata with PyAV instead of `ffprobe`. It takes the same arguments as `python -m ibis_anim`:
+
+   ```sh
+   IBIS_ANIM_QUALITY=low PYTHONPATH=C:/path/to/ibis-anim X:/v/Scripts/python manim018.py C:/path/to/ibis-anim/examples/table_ops.py
+   ```
+
+For each render, the last line must be `ibis_anim: video at ...`, and no line must say `plain animation` or `Traceback`. Render one example on real data (`table_ops.py`) and one schema-only example (`schema_only.py`). Then compare their frames with a render on the current stack.
+
 ## Read a dbt test
 
 `Project._tests` in `ibis_anim/_dbt.py` turns the tests and constraints of the YAML columns into the arguments of `declare`: `unique`, `not_null` and `values`.
