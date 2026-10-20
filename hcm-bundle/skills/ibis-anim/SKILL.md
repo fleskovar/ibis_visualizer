@@ -160,13 +160,24 @@ The generated rows illustrate the steps only. The facts do not use them. A grid 
 
 ### Steps with no result row
 
-When the rows of a step reach no result row, the step does one of two things:
+When the rows of a step reach no result row, a caption tells which of four cases applies:
 
-- **The result has no row for any data.** On real data, the count of the full result is 0. On a table with a schema only, the facts allow no row: a column has no possible value, or the step keeps 0 rows (`limit(0)`). The step keeps its rows, and a caption gives the reason, for example `the result has no row for any data: status has no possible value after ...`.
-- **The result can have rows.** The step runs again on other rows: up to 3 rows of each input that reach the result, and up to 3 that do not. On real data, these rows come from the full input, and the counts stay the counts of the full tables. On a table with a schema only, they come from 30 generated rows, which also use the literals of the step, for example `VIP` for `startswith("VIP")`. A caption says that the rows changed. If no such row is found, the caption says `no sample row reaches the result: the full table can still have rows`.
+| Case | When | Caption |
+| --- | --- | --- |
+| An input has no row | Real data: the full input table has 0 rows. | `orders has no row, so the result has no row` |
+| No data can give a row | The facts of the step allow no row: a column with no possible value, a condition that is never true, or `limit(0)`. This also applies to real data. | `the result has no row for any data: ` and the reason |
+| This data gives no row | Real data: the full result has 0 rows, but other data can give rows. | `no row of this data reaches the result: other data can give rows` |
+| The first rows miss by chance | The full result can have rows. | The step runs again on other rows, see below. |
 
-A row reaches the result when the result has a row with the same values in the columns that they share. Thus a row with a null in such a column does not count.
+In the last case, the step gets new rows for each input: up to 4 rows that reach the result and up to 2 that do not.
 
+- On real data, the rows come from the full input. The counts in the titles stay the counts of the full tables, also in a chain. In a chain, up to 2 rows of the step before stay on the screen as rows that do not reach the result.
+- On a table with a schema only, the rows come from 30 generated rows, which also use the literals of the step, for example `VIP` for `startswith("VIP")`.
+- An input row reaches the result when it has the same values as a result row in each result column that copies an input column. The match follows renamed columns, for example `name_right` of a join, and the keys of an aggregate. A null matches a null.
+- The rows that reach the result are sorted by these columns, so the rows of a group stay together. Thus an aggregate with `having(_.count() > 3)` keeps its groups.
+- If no such row is found, the caption says `no sample row reaches the result: the full table can still have rows`.
+
+The search for other rows costs about 50 ms for each step that needs it. On a dbt-ibis project with 48 steps and 16 such steps, the data phase took 0.8 s longer. A render takes about 20 seconds for each step at `low`.
 
 ## dbt-ibis models
 

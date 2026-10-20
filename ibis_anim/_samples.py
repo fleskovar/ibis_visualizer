@@ -116,7 +116,22 @@ def for_step(step, facts: dict, computed: dict | None = None, pool: bool = False
 
 
 def _arrow(op, columns: dict) -> pa.Table:
-    return pa.Table.from_pydict(columns, schema=ibis.schema(op.schema).to_pyarrow())
+    return to_arrow(columns, op.schema)
+
+
+def to_arrow(data, schema) -> pa.Table:
+    """A pyarrow table of `data` (a dict of columns, or a list of rows) in the types of `schema` (ibis or pyarrow).
+
+    Each conversion of Python values to arrow goes through here. A decimal rounds to the scale of its column: pyarrow
+    refuses a value with more digits, for example a generated 12.50 in a decimal(38, 0).
+    """
+    arrow = schema if isinstance(schema, pa.Schema) else ibis.schema(schema).to_pyarrow()
+    columns = dict(data) if isinstance(data, dict) else {name: [row.get(name) for row in data] for name in arrow.names}
+    for field in arrow:
+        if pa.types.is_decimal(field.type):
+            unit = decimal.Decimal(1).scaleb(-field.type.scale)
+            columns[field.name] = [None if v is None else decimal.Decimal(str(v)).quantize(unit) for v in columns[field.name]]
+    return pa.Table.from_pydict({name: columns[name] for name in arrow.names}, schema=arrow)
 
 
 def _below(op) -> list:

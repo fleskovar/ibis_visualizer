@@ -34,7 +34,7 @@ from manim.mobject.svg.svg_mobject import VMobjectFromSVGPath
 
 from ibis_anim._derive import _substitute, column_text, derive
 from ibis_anim._facts import NEVER
-from ibis_anim._samples import for_step, needs_rows
+from ibis_anim._samples import for_step, needs_rows, to_arrow
 from ibis_anim._scope import ScopeFrame, calls, chains, plan, table_names
 from ibis_anim._tracer import Step, _names, recording, trace
 
@@ -150,7 +150,7 @@ def _types(table) -> dict[str, str]:
 
 def _memtable(rows: pa.Table, schema):
     # a copy: arrow from DuckDB keeps its DuckDB buffers, about 8 MB a column, and ibis keeps each memtable until exit
-    mem = ibis.memtable(pa.Table.from_pylist(rows.to_pylist(), schema=rows.schema))
+    mem = ibis.memtable(to_arrow(rows.to_pylist(), rows.schema))
     return (mem if mem.schema() == schema else mem.cast(schema)).op()
 
 
@@ -193,51 +193,65 @@ def _run_on_samples(step: Step, given: dict | None = None, computed: dict | None
     schema only, or in a chain, the rows that the step before it showed (not a new sample of the full table).
     `computed` maps a table op to the table that `_materialize` made for it.
     """
-    given = given or {}
-    mapping, run = _binder(given, computed or {})  # a chained join reads the tables of the joins before it: they run on their given rows too
+    given, computed = given or {}, computed or {}
+    mapping, run = _binder(given, computed)  # a chained join reads the tables of the joins before it: they run on their given rows too
     arrows = [given[t.op()][0] if t.op() in given else run(t).head(PREVIEW_ROWS).to_pyarrow() for t in step.inputs]
     mapping = {k: v for k, v in mapping.items() if k != step.output.op()}  # the step itself runs on the rows
     mapping |= {t.op(): _memtable(a, t.schema()) for t, a in zip(step.inputs, arrows)}
-    ins = [Sample(label, t.columns, a.to_pylist(), _count(run(t)), partial=t.op() in given and given[t.op()][1],
+    ins = [Sample(label, t.columns, a.to_pylist(), _total(t, run, computed), partial=t.op() in given and given[t.op()][1],
                   types=_types(t), source=t.op(), generated=needs_rows(t))
            for t, label, a in zip(step.inputs, step.labels, arrows)]
     result = _substitute(step.output.op(), mapping).to_expr().to_pyarrow()
     partial = any(s.partial or len(s.rows) < s.total for s in ins)
-    out = Sample("result", step.output.columns, result.to_pylist(), _count(run(step.output)), partial, _types(step.output),
+    out = Sample("result", step.output.columns, result.to_pylist(), _total(step.output, run, computed), partial, _types(step.output),
                  generated=needs_rows(step.output))
     return ins, out, result.slice(0, MAX_RESULT_ROWS)
+
+
+def _total(table, run, computed: dict) -> int:
+    """The row count of a table: of the full table on real data, also in a chain, and of its rows on a schema only."""
+    return _count(run(table)) if needs_rows(table) else _count(_substitute(table.op(), computed).to_expr())
+
+
+REACH_ROWS, MISS_ROWS = 4, 2  # the rows of an input that a step gets when its first rows reach no result row
 
 
 def _rows_for_step(step: Step, given: dict, computed: dict, facts: dict) -> tuple[list[Sample], Sample, pa.Table, str | None]:
     """`_run_on_samples`, and a caption when the sample result has no row.
 
-    A result with no row for any data keeps its rows and says why. Else the first rows reach no result row by
-    chance: the step runs on other rows, some that reach the result and some that do not.
+    The caption tells four cases apart: an input with no row; a result that no data can have, from the facts; a
+    result that this data does not have; and a result that the first rows miss by chance. In the last case the step
+    runs on other rows, some that reach the result and some that do not.
     """
     ins, out, rows = _run_on_samples(step, given, computed)
-    if out.rows or not any(s.rows for s in ins):
+    if out.rows:
         return ins, out, rows, None
-    reason = _empty_for_sure(step, out, facts)
+    empty = [s.label for s in ins if not s.generated and s.total == 0]
+    if empty:
+        return ins, out, rows, f"{empty[0]} has no row, so the result has no row"
+    if not any(s.rows for s in ins):  # a cast of generated text: the step shows the types only
+        return ins, out, rows, None
+    reason = _impossible(step, facts)
     if reason:
         return ins, out, rows, f"the result has no row for any data: {reason}"
-    other = _reaching_rows(step, facts, computed)
+    if not out.generated and out.total == 0:
+        return ins, out, rows, "no row of this data reaches the result: other data can give rows"
+    try:
+        other = _reaching_rows(step, facts, computed, {op: shown for op, (shown, _) in given.items()})
+    except Exception as exc:  # the other rows are a help: without them, the step keeps its first rows
+        print(f"ibis_anim: no other rows for step {step.op} ({exc!r})", file=sys.stderr)
+        other = {}
     if other:
         more_ins, more_out, more_rows = _run_on_samples(step, other, computed)
         if more_out.rows:
-            if not out.generated:  # the counts are the counts of the full tables, not of the chosen rows
-                for chosen, first in zip(more_ins, ins):
-                    chosen.total = first.total
-                more_out.total = out.total
             return more_ins, more_out, more_rows, ("the first rows reach no result row: these rows come from further down "
                                                    "the input" if not out.generated else "the first generated rows reach "
                                                    "no result row: these are other generated rows")
     return ins, out, rows, "no sample row reaches the result: the full table can still have rows"
 
 
-def _empty_for_sure(step: Step, out: Sample, facts: dict) -> str | None:
-    """Why the result has no row for any data, else None. Real data: its full count. A schema only: its facts."""
-    if not out.generated:
-        return "the full result has no row" if out.total == 0 else None
+def _impossible(step: Step, facts: dict) -> str | None:
+    """Why no data gives the result a row, from the facts of the step, else None."""
     found = facts.get(step.output.op())
     if found is None:
         return None
@@ -247,26 +261,69 @@ def _empty_for_sure(step: Step, out: Sample, facts: dict) -> str | None:
     return next((w for w in found.warnings if "keeps no row" in w), f"{empty[0]} has no possible value") if empty else None
 
 
-def _reaching_rows(step: Step, facts: dict, computed: dict) -> dict:
-    """Rows for each table that the step reads: up to 3 that reach the result and up to 3 that do not.
+def _reaching_rows(step: Step, facts: dict, computed: dict, shown: dict) -> dict:
+    """Rows for each table that the step reads: up to REACH_ROWS that reach the result, and up to MISS_ROWS that do not.
 
-    Real data: rows of the full table. A schema only: rows of a larger generated set, with the literals of the step.
-    ponytail: a row reaches the result when the result has a row with its values in the columns that they share, so a
-    row with a null in such a column never reaches it. Lineage of each row would be exact.
+    Real data: rows of the full table; in a chain, the rows on the screen stay as the rows that do not reach it. A
+    schema only: rows of a larger generated set, with the literals of the step.
     """
     pool = {op: (rows, True) for op, rows in for_step(step, facts, computed, pool=True).items()}
     run = _binder(pool, computed)[1]
     result = run(step.output)
     chosen = {}
     for op in list(pool) or [t.op() for t in step.inputs]:
-        table = run(op.to_expr())
-        shared = [c for c in table.columns if c in result.columns and table.schema()[c] == result.schema()[c]]
-        if shared:
-            reach = table.semi_join(result, shared).head(3).to_pyarrow().to_pylist()
-            miss = table.anti_join(result, shared).head(3).to_pyarrow().to_pylist()
-            rows = [r for pair in itertools.zip_longest(reach, miss) for r in pair if r is not None]
-            chosen[op] = (pa.Table.from_pylist(rows, schema=op.schema.to_pyarrow()), True)
+        split = _split(step.output.op(), op, run(op.to_expr()), result)
+        if split is None:
+            continue
+        reach, miss = split
+        if op in shown and not needs_rows(op):  # a chain: the rows of the step before stay on the screen
+            miss = [r for r in shown[op].to_pylist() if r not in reach][:MISS_ROWS] or miss
+        rows = [r for pair in itertools.zip_longest(reach, miss) for r in pair if r is not None]
+        chosen[op] = (to_arrow(rows, op.schema), True)
     return chosen
+
+
+def _split(output, source, table, result) -> tuple[list[dict], list[dict]] | None:
+    """Rows of `table` (the rows of `source`) that reach the first rows of `result` (the rows of `output`), and rows that
+    reach no row of it. None when no column of the result comes from `source`.
+
+    A row reaches a result row when it has the same values, nulls too, in each result column that copies a column of
+    `source`, also under another name. The rows that reach it are sorted by these columns, so the rows of a group stay
+    together: an aggregate with `having` still keeps the group.
+    """
+    pairs = _lineage(output, source)  # result column → column of source
+    if not pairs:
+        return None
+    first, whole = result.head(3).view(), result.view()
+
+    def same(rows):  # null-safe: IS NOT DISTINCT FROM
+        return [table[s].identical_to(rows[o]) for o, s in pairs.items()]
+
+    reach = table.semi_join(first, same(first)).order_by(list(dict.fromkeys(pairs.values()))).head(REACH_ROWS)
+    miss = table.anti_join(whole, same(whole)).head(MISS_ROWS)
+    return reach.to_pyarrow().to_pylist(), miss.to_pyarrow().to_pylist()
+
+
+def _lineage(op, source) -> dict[str, str]:
+    """Each column of `op` that is a column of `source` without a change: column of op → column of source."""
+    if op == source:
+        return {c: c for c in op.schema}
+    if isinstance(op, ops.Set):  # union, intersect, difference: the columns come from both sides
+        return _lineage(op.left, source) | _lineage(op.right, source)
+    fields = op.groups if isinstance(op, ops.Aggregate) else getattr(op, "values", None)
+    if isinstance(fields, dict):  # a projection, a join, the keys of an aggregate: a field passes a column on
+        found = {}
+        for name, value in fields.items():
+            if isinstance(value, ops.Field):
+                below = _lineage(value.rel, source)
+                if value.name in below:
+                    found[name] = below[value.name]
+        return found
+    parent = getattr(op, "parent", None)
+    if parent is None or isinstance(op, (ops.FillNull, ops.Unnest)):  # these change the values of a column
+        return {}
+    below = _lineage(parent, source)
+    return {c: below[c] for c in op.schema if c in below}
 
 
 def _plain_samples(step: Step, given: dict | None = None, computed: dict | None = None) -> tuple[list[Sample], Sample]:
@@ -404,7 +461,7 @@ def _tree_text(tree, numbers: dict) -> str:
 
 def _evaluate(values: list, table, rows: list[dict]) -> list[list]:
     """The value of each expression on each of `rows` of `table`: the expressions run on a memtable of the rows."""
-    mem = ibis.memtable(pa.Table.from_pylist(rows, schema=table.schema().to_pyarrow()))
+    mem = ibis.memtable(to_arrow(rows, table.schema()))
     mapping = {table.op(): mem.op()}
     if isinstance(table.op(), ops.JoinChain):  # the values of a join read the fields of its tables: each is a column of the rows
         mapping |= {f: ops.Field(mem.op(), name) for name, f in table.op().values.items() if isinstance(f, ops.Field)}

@@ -190,6 +190,23 @@ def test_a_generated_result_says_whether_it_is_empty_for_any_data():
     assert not out.rows and "can still have rows" in (caption or ""), caption
 
 
+def test_decimals_take_the_scale_of_their_column():
+    import decimal
+
+    from ibis_anim._samples import to_arrow
+
+    table = to_arrow([{"qty": decimal.Decimal("12.50"), "price": decimal.Decimal("3.456")}], {"qty": "decimal(38, 0)", "price": "decimal(10, 2)"})
+    assert table.to_pylist() == [{"qty": decimal.Decimal("12"), "price": decimal.Decimal("3.46")}], table.to_pylist()
+    stock = ibis_anim.table({"id": "int64", "qty": "decimal(38, 0)"}, name="stock")  # NUMBER(38,0) in a warehouse
+
+    def big():
+        return stock.filter(stock.qty > 10)
+
+    _, steps = ibis_anim.trace(big)
+    rows = for_step(steps[0], derive(steps, table_names(steps)))[stock.op()]  # before: ArrowInvalid, 12.50 has a fraction
+    assert rows.num_rows and all(r["qty"] == r["qty"].to_integral_value() for r in rows.to_pylist()), rows.to_pylist()
+
+
 if __name__ == "__main__":
     test_each_step_has_its_own_rows()
     test_rows_follow_the_facts_and_the_join_keys()
@@ -202,4 +219,5 @@ if __name__ == "__main__":
     test_a_named_column_of_an_earlier_table_reads_the_rows_of_the_input()
     test_a_filter_gets_rows_that_pass_it_also_for_a_narrow_range_or_a_text_test()
     test_a_generated_result_says_whether_it_is_empty_for_any_data()
+    test_decimals_take_the_scale_of_their_column()
     print("ok")
