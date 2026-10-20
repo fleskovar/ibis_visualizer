@@ -29,7 +29,7 @@ import pyarrow as pa
 from ibis_anim._derive import _frontier, _substitute
 from ibis_anim._facts import ANY, TableFacts
 
-ROWS, MAX_ROWS, SET_ROWS = 6, 8, 4
+ROWS, MAX_ROWS, SET_ROWS, POOL_ROWS = 6, 8, 4, 30  # POOL_ROWS: rows to choose from when the first rows reach no result
 TESTS = {
     ops.Equals: lambda v: P.singleton(v), ops.NotEquals: lambda v: ANY - P.singleton(v),
     ops.Greater: lambda v: P.open(v, P.inf), ops.GreaterEqual: lambda v: P.closed(v, P.inf),
@@ -49,22 +49,28 @@ def _reads_unbound(op) -> bool:
     return bool(op.find(ops.UnboundTable))  # ponytail: one walk of the plan for each op, then cached; a walk that stops at known ops is faster
 
 
-def for_step(step, facts: dict, computed: dict | None = None) -> dict:
+def for_step(step, facts: dict, computed: dict | None = None, pool: bool = False) -> dict:
     """Generated rows (a pyarrow table) for each schema-only table that the step reads.
 
     The tables are the frontier of the step: usually its inputs, but a chained join reads the tables of
     the joins before it. A step on real data gets {}. A step that casts text gets tables without rows.
     `computed` maps a table op to the op of a table that holds its rows: a join key on real data reads it.
+    With `pool`, the tables get POOL_ROWS different rows, with the literals of the step among the values: rows to
+    choose from when the first rows reach no result.
     """
     output = step.output.op()
-    known = set(facts) | {t.op() for t in step.inputs} | set(output.find(ops.UnboundTable))
-    tables = [op for op in _frontier(output, known) if needs_rows(op)]
+    # a named column of a table before the first input: the output reads the input, but the column table reads the earlier table
+    columns_of = [t.op() for t in step.inputs[1:] if t.op() not in output.find(type(t.op()))]
+    known = set(facts) | {t.op() for t in step.inputs} | {u for op in (output, *columns_of) for u in op.find(ops.UnboundTable)}
+    tables = list(dict.fromkeys(op for root in (output, *columns_of) for op in _frontier(root, known) if needs_rows(op)))
     if not tables:
         return {}
     if _casts_text(output):
         return {op: _arrow(op, {c: [] for c in op.schema}) for op in tables}
     verb = step.op.split()[-1]
-    n = SET_ROWS if verb in ("union", "intersect", "difference") else ROWS
+    n = POOL_ROWS if pool else SET_ROWS if verb in ("union", "intersect", "difference") else ROWS
+    literals = [lit.value for v in _own_values(output) for lit in v.find(ops.Literal, filter=ops.Value)] if pool else []
+    extra = [x for v in literals for x in ([v, v + "A", v + "B"] if isinstance(v, str) else [v])]  # 'VIP' for startswith('VIP')
     tests = _tests(_own_values(output), tables)
     tests += [(key, P.singleton(True), False) for p in getattr(output, "predicates", ())  # filter(_.flag)
               if isinstance(p, ops.Field) and (key := _source(p, tables)) is not None]
@@ -80,8 +86,8 @@ def for_step(step, facts: dict, computed: dict | None = None) -> dict:
         columns = {}
         for j, (name, dtype) in enumerate(op.schema.items()):
             col, unique = f.column(name), f.unique(name)
-            period = 0 if unique else repeat.get(name) or (3 if dtype.is_string() or dtype.is_boolean() else 0)
-            values = _values(dtype, col.values, m, period)
+            period = 0 if unique or pool else repeat.get(name) or (3 if dtype.is_string() or dtype.is_boolean() else 0)
+            values = _values(dtype, col.values, m, period, extra)
             mine = [(k, t) for k, t in enumerate(tests) if t[0] == (op, name)]
             if mine:
                 chosen = []
@@ -102,6 +108,10 @@ def for_step(step, facts: dict, computed: dict | None = None) -> dict:
         a, b = (data[t] for t in tables)
         for name in b:
             b[name][: n // 2] = a[name][1: 1 + n // 2]  # half of the rows are in both tables
+    first = step.inputs[0]
+    for op in {op for root in columns_of for op in _frontier(root, known)} & set(data) - {first.op()}:
+        if first.op() in data and all(first.schema().get(c) == t for c, t in op.schema.items()):
+            data[op] = {c: list(data[first.op()][c]) for c in op.schema}  # ibis reads the column on the rows of the input
     return {op: _arrow(op, columns) for op, columns in data.items()}
 
 
@@ -293,16 +303,16 @@ def _tested(dtype, col, tests: list, default, earlier: list):
     return None if null_ok else default  # ponytail: tests that no value of the facts satisfies keep the plain value
 
 
-def _values(dtype, allowed: P.Interval, n: int, period: int) -> list:
-    """`n` values of a type inside `allowed`; with `period`, the first `period` values repeat."""
-    picked = _fitting(dtype, allowed, period or n) or _take(_candidates(dtype, ANY), period or n)  # else the type only
+def _values(dtype, allowed: P.Interval, n: int, period: int, extra=()) -> list:
+    """`n` values of a type inside `allowed`; with `period`, the first `period` values repeat. `extra` values come first."""
+    picked = _fitting(dtype, allowed, period or n, extra=extra) or _take(_candidates(dtype, ANY), period or n)  # else the type only
     return [picked[i % len(picked)] for i in range(n)]
 
 
-def _fitting(dtype, allowed: P.Interval, n: int, avoid=()) -> list:
-    """Up to `n` different values of a type inside `allowed`, other than `avoid`."""
+def _fitting(dtype, allowed: P.Interval, n: int, avoid=(), extra=()) -> list:
+    """Up to `n` different values of a type inside `allowed`, other than `avoid`. `extra` values are tried first."""
     picked = []
-    for v in _take(_candidates(dtype, allowed), 300):  # the plain values have no end
+    for v in _take(_candidates(dtype, allowed, extra), 300):  # the plain values have no end
         if v not in picked and v not in avoid and _safe(lambda: _fits(dtype, v) and v in allowed, False):
             picked.append(v)
             if len(picked) == n:
@@ -314,21 +324,42 @@ def _take(values, n: int) -> list:
     return [v for _, v in zip(range(n), values)]
 
 
-def _candidates(dtype, allowed: P.Interval):
-    """Values of a type to try: the points and the bounds of `allowed` first, then plain values of the type."""
+def _candidates(dtype, allowed: P.Interval, extra=()):
+    """Values of a type to try: `extra`, the points and the bounds of `allowed`, values inside its bounded parts,
+    then plain values of the type."""
+    yield from extra
     points = [a.lower for a in allowed if not allowed.empty and a.lower == a.upper]
     yield from points
     bounds = [b for a in ([] if allowed.empty else allowed) for b in (a.lower, a.upper) if b not in (P.inf, -P.inf)]
     for b in bounds:
         yield from _around(dtype, b)
+    for a in [] if allowed.empty else allowed:  # a narrow range, (100, 120): no value near its bounds is inside it
+        yield from _inside(a.lower, a.upper)
     yield from _base(dtype)
+
+
+def _inside(low, high) -> list:
+    """The middle and the quarters of a bounded range, or nothing for a range without two bounds of one kind."""
+    if P.inf in (low, high) or -P.inf in (low, high) or isinstance(low, bool) or isinstance(high, bool):
+        return []
+    if isinstance(low, int) and isinstance(high, int):
+        return [low + (high - low) * k // 4 for k in (2, 1, 3)]
+    try:
+        return [low + (high - low) * k / 4 for k in (2, 1, 3)]  # float, decimal, date and timestamp
+    except TypeError:  # text, or bounds of different kinds
+        return []
 
 
 def _around(dtype, b) -> list:
     """Values near a bound: on both sides of it, and the bound itself."""
     if isinstance(b, (datetime.date, datetime.datetime)):
-        day = datetime.timedelta(days=1)
-        return [b + day, b + 3 * day, b - day, b - 3 * day, b]
+        near = []
+        for days in (1, 3, -1, -3):
+            try:
+                near.append(b + datetime.timedelta(days=days))
+            except OverflowError:  # the bound is near the end of the range, for example 9999-12-31 for an open end
+                pass
+        return near + [b]
     if isinstance(b, bool) or not isinstance(b, (int, float, decimal.Decimal)):
         return [b]
     step = max(abs(b) * 0.5, 1)

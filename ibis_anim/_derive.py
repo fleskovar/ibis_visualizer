@@ -261,6 +261,9 @@ def _join(join: exp.Join, cols, keys, rows, left_name, env, warnings):
 def _where(condition, cols, warnings):
     cols = dict(cols)
     for cond in _conjuncts(condition):
+        if isinstance(cond, exp.Boolean) and not cond.this:  # the optimizer makes a contradiction FALSE: a > 100 AND a < 50
+            warnings.append("the condition is never true: the filter keeps no row")
+            return {k: replace(f, values=P.empty(), nulls=NEVER) for k, f in cols.items()}
         if isinstance(cond, exp.EQ) and isinstance(cond.this, exp.Column) and isinstance(cond.expression, exp.Column):
             a, b = (cond.this.table, cond.this.name), (cond.expression.table, cond.expression.name)
             if a in cols and b in cols:

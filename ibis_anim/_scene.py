@@ -33,6 +33,7 @@ from manim import (
 from manim.mobject.svg.svg_mobject import VMobjectFromSVGPath
 
 from ibis_anim._derive import _substitute, column_text, derive
+from ibis_anim._facts import NEVER
 from ibis_anim._samples import for_step, needs_rows
 from ibis_anim._scope import ScopeFrame, calls, chains, plan, table_names
 from ibis_anim._tracer import Step, _names, recording, trace
@@ -207,6 +208,67 @@ def _run_on_samples(step: Step, given: dict | None = None, computed: dict | None
     return ins, out, result.slice(0, MAX_RESULT_ROWS)
 
 
+def _rows_for_step(step: Step, given: dict, computed: dict, facts: dict) -> tuple[list[Sample], Sample, pa.Table, str | None]:
+    """`_run_on_samples`, and a caption when the sample result has no row.
+
+    A result with no row for any data keeps its rows and says why. Else the first rows reach no result row by
+    chance: the step runs on other rows, some that reach the result and some that do not.
+    """
+    ins, out, rows = _run_on_samples(step, given, computed)
+    if out.rows or not any(s.rows for s in ins):
+        return ins, out, rows, None
+    reason = _empty_for_sure(step, out, facts)
+    if reason:
+        return ins, out, rows, f"the result has no row for any data: {reason}"
+    other = _reaching_rows(step, facts, computed)
+    if other:
+        more_ins, more_out, more_rows = _run_on_samples(step, other, computed)
+        if more_out.rows:
+            if not out.generated:  # the counts are the counts of the full tables, not of the chosen rows
+                for chosen, first in zip(more_ins, ins):
+                    chosen.total = first.total
+                more_out.total = out.total
+            return more_ins, more_out, more_rows, ("the first rows reach no result row: these rows come from further down "
+                                                   "the input" if not out.generated else "the first generated rows reach "
+                                                   "no result row: these are other generated rows")
+    return ins, out, rows, "no sample row reaches the result: the full table can still have rows"
+
+
+def _empty_for_sure(step: Step, out: Sample, facts: dict) -> str | None:
+    """Why the result has no row for any data, else None. Real data: its full count. A schema only: its facts."""
+    if not out.generated:
+        return "the full result has no row" if out.total == 0 else None
+    found = facts.get(step.output.op())
+    if found is None:
+        return None
+    if found.rows == "≤ 0":
+        return "the step keeps 0 rows"
+    empty = [c for c, col in found.columns.items() if col.values.empty and col.nulls == NEVER]
+    return next((w for w in found.warnings if "keeps no row" in w), f"{empty[0]} has no possible value") if empty else None
+
+
+def _reaching_rows(step: Step, facts: dict, computed: dict) -> dict:
+    """Rows for each table that the step reads: up to 3 that reach the result and up to 3 that do not.
+
+    Real data: rows of the full table. A schema only: rows of a larger generated set, with the literals of the step.
+    ponytail: a row reaches the result when the result has a row with its values in the columns that they share, so a
+    row with a null in such a column never reaches it. Lineage of each row would be exact.
+    """
+    pool = {op: (rows, True) for op, rows in for_step(step, facts, computed, pool=True).items()}
+    run = _binder(pool, computed)[1]
+    result = run(step.output)
+    chosen = {}
+    for op in list(pool) or [t.op() for t in step.inputs]:
+        table = run(op.to_expr())
+        shared = [c for c in table.columns if c in result.columns and table.schema()[c] == result.schema()[c]]
+        if shared:
+            reach = table.semi_join(result, shared).head(3).to_pyarrow().to_pylist()
+            miss = table.anti_join(result, shared).head(3).to_pyarrow().to_pylist()
+            rows = [r for pair in itertools.zip_longest(reach, miss) for r in pair if r is not None]
+            chosen[op] = (pa.Table.from_pylist(rows, schema=op.schema.to_pyarrow()), True)
+    return chosen
+
+
 def _plain_samples(step: Step, given: dict | None = None, computed: dict | None = None) -> tuple[list[Sample], Sample]:
     run = _binder(given or {}, computed or {})[1]
 
@@ -343,7 +405,10 @@ def _tree_text(tree, numbers: dict) -> str:
 def _evaluate(values: list, table, rows: list[dict]) -> list[list]:
     """The value of each expression on each of `rows` of `table`: the expressions run on a memtable of the rows."""
     mem = ibis.memtable(pa.Table.from_pylist(rows, schema=table.schema().to_pyarrow()))
-    exprs = {f"v{k}": _substitute(v, {table.op(): mem.op()}).to_expr() for k, v in enumerate(values)}
+    mapping = {table.op(): mem.op()}
+    if isinstance(table.op(), ops.JoinChain):  # the values of a join read the fields of its tables: each is a column of the rows
+        mapping |= {f: ops.Field(mem.op(), name) for name, f in table.op().values.items() if isinstance(f, ops.Field)}
+    exprs = {f"v{k}": _substitute(v, mapping).to_expr() for k, v in enumerate(values)}
     found = mem.select(**exprs).to_pyarrow().to_pylist()
     return [[r[f"v{k}"] for k in range(len(values))] for r in found]
 
@@ -363,6 +428,12 @@ def _inserted_columns(step: Step, ins: list, computed: list) -> dict:
             if target is not None:
                 found[target] = (sample, cname)
     return found
+
+
+def _sort_keys(keys) -> list[tuple[str, bool]]:
+    """(column, ascending) for each sort key that is a column. ibis 12 calls the value of a key `arg`, ibis 10 and 11 `expr`."""
+    values = [(k.arg if hasattr(k, "arg") else k.expr, k.ascending) for k in keys]
+    return [(v.name, ascending) for v, ascending in values if isinstance(v, ops.Field)]
 
 
 def _window(step: Step):
@@ -664,6 +735,12 @@ class DebuggerScene(Scene):
             .move_to([CARDS_LEFT + 0.75, SHELF_LINE - 0.15, 0]),
         )
         super().__init__(**kwargs)
+
+    def play(self, *animations, **kwargs):
+        """Skip a play with no animation: a list of moves can be empty for some rows, for example when no row
+        has to slide up. manim raises on an empty play."""
+        if animations:
+            super().play(*animations, **kwargs)
 
     def construct(self):
         self.next_section("00_overview")
@@ -1178,7 +1255,9 @@ class DebuggerScene(Scene):
             if made and self.chain_rows:
                 self._say("a schema only: this step gets its own generated rows, not the rows of the step before")
             given = made or given
-            ins, out, rows = _run_on_samples(step, given, self.computed)
+            ins, out, rows, caption = _rows_for_step(step, given, self.computed, self.facts)
+            if caption:
+                self._say(caption)
             self.next_rows = {step.output.op(): (rows, out.partial)}  # for the next step, if it continues the chain
             if out.generated:  # for the card of the result
                 self.made[step.output.op()] = out.rows
@@ -1544,7 +1623,7 @@ class DebuggerScene(Scene):
     def _order_by(self, step: Step, ins: list[Sample], out: Sample):
         """Highlight the sort keys, draw their direction, and move each row to its new position."""
         s = ins[0]
-        keys = [(k.arg.name, k.ascending) for k in step.output.op().keys if isinstance(k.arg, ops.Field)]
+        keys = _sort_keys(step.output.op().keys)
         names = [k for k, _ in keys]
         grid = Grid(s, _pick_columns(s.columns, names), _cell_width([s], s.columns), used=names)
         self._in_place(grid)
@@ -1768,7 +1847,7 @@ class DebuggerScene(Scene):
         s = ins[0]
         target, w = _window(step)
         partition = [g.name for g in w.group_by if isinstance(g, ops.Field)]
-        order = [(k.arg.name, k.ascending) for k in w.order_by if isinstance(k.arg, ops.Field)]
+        order = _sort_keys(w.order_by)
         value = next((f.name for f in w.func.find(ops.Field, filter=ops.Value)), None)
         important = [*partition, *(n for n, _ in order), *([value] if value else [])]
         in_shown = _pick_columns(s.columns, important, MAX_COLUMNS - 1)

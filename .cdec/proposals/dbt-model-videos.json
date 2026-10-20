@@ -1180,6 +1180,17 @@
        "status": "changed"
       },
       {
+       "name": "play",
+       "parameters": [],
+       "return_type": "",
+       "visibility": "public",
+       "is_static": false,
+       "is_abstract": false,
+       "description": "Skips a play with no animation (manim raises on it); approved in the test review of the union defect.",
+       "rules": [],
+       "status": "added"
+      },
+      {
        "name": "construct",
        "parameters": [],
        "return_type": "",

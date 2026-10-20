@@ -137,7 +137,7 @@ To read the facts without a render, print `ibis_anim.report(pipeline, *args)`:
 
 The analysis warns about these possible mistakes:
 
-- a filter that keeps no row
+- a filter that keeps no row, also for a condition that is never true, for example `(amount > 100) & (amount < 50)`
 - a join that can repeat rows, because the right key is not known to be unique (fan-out)
 - join keys with no value in common
 - a division by a column that can be 0
@@ -157,6 +157,16 @@ A table with a schema only, `ibis.table({"order_id": "int64", ...}, name="orders
 - A step that casts text to another type gets no rows. The video shows the change of the types only.
 
 The generated rows illustrate the steps only. The facts do not use them. A grid of generated rows shows `6 generated rows`, not a row count.
+
+### Steps with no result row
+
+When the rows of a step reach no result row, the step does one of two things:
+
+- **The result has no row for any data.** On real data, the count of the full result is 0. On a table with a schema only, the facts allow no row: a column has no possible value, or the step keeps 0 rows (`limit(0)`). The step keeps its rows, and a caption gives the reason, for example `the result has no row for any data: status has no possible value after ...`.
+- **The result can have rows.** The step runs again on other rows: up to 3 rows of each input that reach the result, and up to 3 that do not. On real data, these rows come from the full input, and the counts stay the counts of the full tables. On a table with a schema only, they come from 30 generated rows, which also use the literals of the step, for example `VIP` for `startswith("VIP")`. A caption says that the rows changed. If no such row is found, the caption says `no sample row reaches the result: the full table can still have rows`.
+
+A row reaches the result when the result has a row with the same values in the columns that they share. Thus a row with a null in such a column does not count.
+
 
 ## dbt-ibis models
 

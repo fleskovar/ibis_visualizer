@@ -110,6 +110,86 @@ def test_distinct_keeps_a_declared_key_unique():
     assert len(set(keys)) == len(keys)
 
 
+def test_values_near_a_bound_of_the_date_range_stay_in_the_range():
+    import datetime
+
+    from ibis_anim._samples import _around
+
+    for dtype, bound in (("date", datetime.date.max), ("date", datetime.date.min), ("timestamp", datetime.datetime.max)):
+        near = _around(ibis.dtype(dtype), bound)  # an OverflowError before the fix: bound ± 1 day is out of the range
+        assert bound in near and len(set(near)) > 1, (dtype, near)
+    history = ibis_anim.table({"customer_id": "int64", "valid_to": "date"}, name="history")
+    end = datetime.date(9999, 12, 31)  # the open end of a history table
+
+    def current():
+        return history.filter(history.valid_to == ibis.date(end))
+
+    _, steps = ibis_anim.trace(current)
+    rows = for_step(steps[0], derive(steps, table_names(steps)))[history.op()].to_pylist()
+    passing = [r for r in rows if r["valid_to"] == end]
+    assert passing and len(passing) < len(rows), rows  # rows on both sides of the test
+
+
+def test_a_named_column_of_an_earlier_table_reads_the_rows_of_the_input():
+    from ibis_anim._scene import _run_on_samples
+
+    def pipeline():
+        label = ibis.coalesce(orders.status, ibis.literal("none"))  # a column of orders
+        big = orders.filter(orders.amount > 100)
+        return big.select("order_id", label=label)  # ibis reads the column on the rows of big
+
+    _, steps = ibis_anim.trace(pipeline)
+    step = steps[-1]
+    assert step.op == "select" and len(step.inputs) == 2  # big, and the one-column table of label
+    given = {op: (rows, False) for op, rows in for_step(step, derive(steps, table_names(steps))).items()}
+    ins, out, _ = _run_on_samples(step, given)  # an IbisError before the fix: no rows for orders
+    big_rows, label_rows = ins[0].rows, ins[1].rows
+    assert big_rows and [r["label"] for r in label_rows] == [r["status"] or "none" for r in big_rows]  # the same rows
+    assert [r["label"] for r in out.rows] == [r["label"] for r in label_rows]
+
+
+def _rows_of_last_step(pipeline):
+    from ibis_anim._scene import _rows_for_step
+
+    _, steps = ibis_anim.trace(pipeline)
+    facts = derive(steps, table_names(steps))
+    given = {op: (rows, False) for op, rows in for_step(steps[-1], facts).items()}
+    return _rows_for_step(steps[-1], given, {}, facts)
+
+
+def test_a_filter_gets_rows_that_pass_it_also_for_a_narrow_range_or_a_text_test():
+    def narrow():
+        big = orders.filter(orders.amount > 100)
+        return big.filter(big.amount < 120)  # before the fix: the values jump from 100 over 120
+
+    def prefix():
+        return orders.filter(orders.status.startswith("VIP"))  # before the fix: A, B, C never start with VIP
+
+    for pipeline, passes in ((narrow, lambda r: 100 < r["amount"] < 120), (prefix, lambda r: r["status"].startswith("VIP"))):
+        ins, out, _, _ = _rows_of_last_step(pipeline)
+        assert out.rows and all(passes(r) for r in out.rows), out.rows
+        assert any(not passes(r) for r in ins[0].rows if r["amount"] is not None and r["status"] is not None), ins[0].rows
+
+
+def test_a_generated_result_says_whether_it_is_empty_for_any_data():
+    def no_value():
+        paid = orders.filter(orders.status == "a")
+        return paid.filter(paid.status == "b")
+
+    def impossible():
+        return orders.filter((orders.amount > 100) & (orders.amount < 50))
+
+    for pipeline in (no_value, impossible, lambda: orders.limit(0)):
+        ins, out, rows, caption = _rows_of_last_step(pipeline)
+        assert not out.rows and "for any data" in (caption or ""), (pipeline, caption)
+
+    def constant_year():  # empty, but the facts cannot prove it: no rows found, and the caption does not say empty
+        return orders.mutate(day=ibis.date("2024-01-01")).filter(_.day.year() == 2023)
+
+    ins, out, rows, caption = _rows_of_last_step(constant_year)
+    assert not out.rows and "can still have rows" in (caption or ""), caption
+
+
 if __name__ == "__main__":
     test_each_step_has_its_own_rows()
     test_rows_follow_the_facts_and_the_join_keys()
@@ -118,4 +198,8 @@ if __name__ == "__main__":
     test_rows_after_a_filter_on_a_computed_column_pass_it()
     test_each_join_of_a_chain_has_matching_keys()
     test_distinct_keeps_a_declared_key_unique()
+    test_values_near_a_bound_of_the_date_range_stay_in_the_range()
+    test_a_named_column_of_an_earlier_table_reads_the_rows_of_the_input()
+    test_a_filter_gets_rows_that_pass_it_also_for_a_narrow_range_or_a_text_test()
+    test_a_generated_result_says_whether_it_is_empty_for_any_data()
     print("ok")

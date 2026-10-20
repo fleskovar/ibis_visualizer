@@ -96,6 +96,18 @@ def test_warnings_point_at_mistakes():
     assert any("can be 0" in w for w in ratio.warnings)
 
 
+def test_a_filter_whose_condition_is_never_true_keeps_no_row():
+    t = ibis_anim.table({"amount": "float64", "status": "string"}, name="payments")
+
+    def impossible():
+        return t.filter((t.amount > 100) & (t.amount < 50))  # the sqlglot optimizer makes the condition FALSE
+
+    _, steps = ibis_anim.trace(impossible)
+    facts = derive(steps, table_names(steps))[steps[-1].output.op()]
+    assert any("keeps no row" in w for w in facts.warnings), facts.warnings
+    assert facts.column("amount").values.empty and facts.column("status").values.empty, facts.columns
+
+
 if __name__ == "__main__":
     test_facts_flow_through_the_operators()
     test_facts_never_come_from_data()
@@ -103,4 +115,5 @@ if __name__ == "__main__":
     test_pivot_longer_makes_rows()
     test_steps_that_can_empty_a_table()
     test_warnings_point_at_mistakes()
+    test_a_filter_whose_condition_is_never_true_keeps_no_row()
     print("ok")

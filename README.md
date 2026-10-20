@@ -50,7 +50,7 @@ The videos are 1080p at 30 frames per second. For faster renders, set `IBIS_ANIM
    - A result that no variable holds gets a name from its operation: `filtered orders`, `orders × stores`, `orders with total`, `revenue by region`. The result of a dbt-ibis model has the name of the model.
    - In a chain (`t.join(...).mutate(...).group_by(...).aggregate(...)`), the result stays on the stage and moves into the next call. Only the last result of the chain goes to the shelf. Each call of the chain runs on the rows that the call before it showed.
    - A table that no later step reads gets small and dim. Two steps after its last use, it leaves the shelf.
-5. At exit, each step runs again on DuckDB, on the first 6 rows of each input only. Thus each value in the animation comes from the rows on the screen.
+5. At exit, each step runs again on DuckDB, on the first 6 rows of each input only. Thus each value in the animation comes from the rows on the screen. If these rows reach no result row, see [Steps with no result row](#steps-with-no-result-row).
 6. Each kind of operation has its own animation, in phases. A caption under the code explains each phase.
 
 | Operation | Animation |
@@ -115,7 +115,7 @@ Each step compiles to SQL with its inputs as placeholders. sqlglot qualifies the
 
 The analysis also finds possible mistakes:
 
-- a filter that keeps no row, for example `status == "payed"` when `status` is in `{paid, refunded}`
+- a filter that keeps no row, for example `status == "payed"` when `status` is in `{paid, refunded}`, or a condition that is never true, for example `(amount > 100) & (amount < 50)`
 - a join that can repeat rows, because the right key is not known to be unique (fan-out)
 - join keys with no value in common
 - a division by a column that can be 0
@@ -142,6 +142,16 @@ In a chain of steps, the result of a step stays on the stage as the input of the
 A step that casts a text column to another type gets no rows: the video shows the change of the types only, and the warning that a text that does not parse makes the cast fail. The grid title reads `schema only`; the title of a grid with generated rows reads `6 generated rows`, as a table with a schema only has no row count.
 
 The generated rows illustrate the steps only. The facts do not come from them. See `examples/schema_only.py`.
+
+### Steps with no result row
+
+When the rows of a step reach no result row, the step does one of two things:
+
+- **The result has no row for any data.** On real data, the count of the full result is 0. On a table with a schema only, the facts allow no row: a column has no possible value, or the step keeps 0 rows (`limit(0)`). The step keeps its rows, and a caption gives the reason, for example `the result has no row for any data: status has no possible value after ...`.
+- **The result can have rows.** The step runs again on other rows: up to 3 rows of each input that reach the result, and up to 3 that do not. On real data, these rows come from the full input, and the counts stay the counts of the full tables. On a table with a schema only, they come from 30 generated rows, which also use the literals of the step, for example `VIP` for `startswith("VIP")`. A caption says that the rows changed. If no such row is found, the caption says `no sample row reaches the result: the full table can still have rows`.
+
+A row reaches the result when the result has a row with the same values in the columns that they share. Thus a row with a null in such a column does not count.
+
 
 ## dbt-ibis models
 

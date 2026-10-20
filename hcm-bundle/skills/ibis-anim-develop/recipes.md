@@ -159,6 +159,8 @@ The user guide for the numpy 1.x stack is [the numpy 1.x setup](../ibis-anim/num
 
 Rules for code that must run on both stacks:
 
+- Read an ibis op field that changed its name between ibis versions through one helper. For example, `SortKey` calls its value `expr` in ibis 10 and 11 and `arg` in ibis 12: `_scene._sort_keys` reads both. Run the checks on ibis 10.8 too, with duckdb 1.3: duckdb 1.4 and later removed `duckdb.functional`, which ibis 10 needs.
+
 - Use only manim features that manim 0.18.1 has. For example, sections, `tempconfig` and the config key `disable_caching` exist in 0.18.1.
 - A config key that only a newer manim has is safe in `tempconfig`: manim 0.18.1 ignores a key that it does not know. `render` sets `max_inflight_encoders` this way. manim 0.19 and later encode the clip of an animation while the next animation draws.
 - A patch of a manim class must work in 0.18.1. For example, the copy patch of `VMobjectFromSVGPath.__deepcopy__` wraps `Mobject.__deepcopy__`, which has the same code in 0.18.1 and 0.22.
