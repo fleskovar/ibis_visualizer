@@ -279,6 +279,8 @@ def _where(condition, cols, warnings):
         cols[key] = replace(col, values=values, nulls=nulls or col.nulls)
         if values.empty and nulls != ALWAYS:
             warnings.append(f"{key[1]} has no possible value after `{_pretty(cond)}`: the filter keeps no row")
+    if any(f.values.empty and f.nulls == NEVER for f in cols.values()):  # one column with no value: no row, so no column has one
+        return {k: replace(f, values=P.empty(), nulls=NEVER) for k, f in cols.items()}  # the same as a FALSE condition
     return {k: f.narrowed() for k, f in cols.items()}
 
 

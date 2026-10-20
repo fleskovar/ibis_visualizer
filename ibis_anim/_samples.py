@@ -128,9 +128,10 @@ def to_arrow(data, schema) -> pa.Table:
     arrow = schema if isinstance(schema, pa.Schema) else ibis.schema(schema).to_pyarrow()
     columns = dict(data) if isinstance(data, dict) else {name: [row.get(name) for row in data] for name in arrow.names}
     for field in arrow:
-        if pa.types.is_decimal(field.type):
-            unit = decimal.Decimal(1).scaleb(-field.type.scale)
-            columns[field.name] = [None if v is None else decimal.Decimal(str(v)).quantize(unit) for v in columns[field.name]]
+        if pa.types.is_decimal(field.type):  # in the precision of the column: the default context has 28 digits, a column up to 76
+            unit, context = decimal.Decimal(1).scaleb(-field.type.scale), decimal.Context(prec=field.type.precision)
+            columns[field.name] = [None if v is None else decimal.Decimal(str(v)).quantize(unit, context=context)
+                                   for v in columns[field.name]]
     return pa.Table.from_pydict({name: columns[name] for name in arrow.names}, schema=arrow)
 
 
@@ -377,7 +378,7 @@ def _around(dtype, b) -> list:
         return near + [b]
     if isinstance(b, bool) or not isinstance(b, (int, float, decimal.Decimal)):
         return [b]
-    step = max(abs(b) * 0.5, 1)
+    step = max(abs(b) / 2, 1)  # also for a Decimal bound: Decimal * float is a TypeError
     step = int(step) if isinstance(b, int) else step
     near = [b + step, b + 2 * step, b - step, b - 2 * step, b, b + 3 * step]
     if dtype.is_integer():
@@ -423,8 +424,10 @@ def _fits(dtype, value) -> bool:
         return isinstance(value, int) and not isinstance(value, bool)
     if dtype.is_floating():
         return isinstance(value, (int, float)) and not isinstance(value, bool)
-    if dtype.is_decimal():
-        return isinstance(value, (int, decimal.Decimal)) and not isinstance(value, bool)
+    if dtype.is_decimal():  # and the digits before the point fit the column: 10**38 does not fit a decimal(38, 0)
+        if not isinstance(value, (int, decimal.Decimal)) or isinstance(value, bool):
+            return False
+        return dtype.precision is None or len(str(abs(int(value)))) <= dtype.precision - (dtype.scale or 0)
     if dtype.is_timestamp():
         return isinstance(value, datetime.datetime)
     if dtype.is_date():

@@ -207,6 +207,28 @@ def test_decimals_take_the_scale_of_their_column():
     assert rows.num_rows and all(r["qty"] == r["qty"].to_integral_value() for r in rows.to_pylist()), rows.to_pylist()
 
 
+def test_decimal_bounds_of_any_size_give_rows_that_fit_the_column():
+    import decimal
+
+    from ibis_anim._samples import to_arrow
+
+    D = decimal.Decimal
+    widest = D("12345678901234567890123456789012345678")  # 38 digits: more than the 28 of the default decimal context
+    assert to_arrow([{"qty": widest}], {"qty": "decimal(38, 0)"}).to_pylist() == [{"qty": widest}]
+    stock = ibis_anim.table({"id": "int64", "qty": "decimal(38, 0)", "price": "decimal(38, 10)"}, name="stock")
+    big = ibis.literal(D(10**30), type="decimal(38, 0)")
+    cases = [(lambda: stock.filter(stock.qty > big), "qty", lambda v: v > 10**30),  # before: Decimal * float in _around
+             (lambda: stock.filter(stock.qty == ibis.literal(D(10**37), type="decimal(38, 0)")), "qty", lambda v: v == 10**37),
+             (lambda: stock.filter(stock.price > ibis.literal(D(10**20), type="decimal(38, 10)")), "price", lambda v: v > 10**20)]
+    for pipeline, column, passes in cases:
+        _, steps = ibis_anim.trace(pipeline)
+        rows = for_step(steps[0], derive(steps, table_names(steps)))[stock.op()].to_pylist()
+        values = [r[column] for r in rows if r[column] is not None]
+        scale = 0 if column == "qty" else 10
+        assert any(passes(v) for v in values), values
+        assert all(len(v.as_tuple().digits) <= 38 and -v.as_tuple().exponent <= scale for v in values), values
+
+
 if __name__ == "__main__":
     test_each_step_has_its_own_rows()
     test_rows_follow_the_facts_and_the_join_keys()
@@ -220,4 +242,5 @@ if __name__ == "__main__":
     test_a_filter_gets_rows_that_pass_it_also_for_a_narrow_range_or_a_text_test()
     test_a_generated_result_says_whether_it_is_empty_for_any_data()
     test_decimals_take_the_scale_of_their_column()
+    test_decimal_bounds_of_any_size_give_rows_that_fit_the_column()
     print("ok")
